@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+import torchmetrics.functional as TF
 from einops import rearrange
 from packaging import version
 
@@ -338,7 +339,18 @@ class AutoencodingEngine(AbstractAutoencoder):
             sync_dist=True,
         )
         self.log_dict(full_log_dict, sync_dist=True)
+        metric_dict = self.validation_metrics(x, xrec, f"val{postfix}")
+        self.log_dict(metric_dict, sync_dist=True)
         return full_log_dict
+
+    def validation_metrics(self, x: torch.Tensor, xrec: torch.Tensor, prefix: str) -> Dict[str, Any]:
+        xrec = xrec.clamp(-1.0, 1.0)
+        psnr = TF.peak_signal_noise_ratio(x, xrec, data_range=(-1, 1))
+        ssim = TF.structural_similarity_index_measure(x, xrec, data_range=(-1, 1))
+        return {
+            f"{prefix}/metrics/psnr": psnr,
+            f"{prefix}/metrics/ssim": ssim,
+        }
 
     def get_param_groups(
         self, parameter_names: List[List[str]], optimizer_args: List[dict]

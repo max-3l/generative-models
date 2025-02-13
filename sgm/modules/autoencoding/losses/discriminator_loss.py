@@ -180,8 +180,10 @@ class GeneralLPIPSWithDiscriminator(nn.Module):
         fig.tight_layout()
         fig.canvas.draw()
         # manually convert figure to numpy
-        cbar_np = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        cbar_np = cbar_np.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        cbar_np = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
+        cbar_np = cbar_np.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+        cbar_np = np.roll(cbar_np, 3, axis=2)
+        cbar_np = cbar_np[:, :, :3]
         cbar = torch.from_numpy(cbar_np.copy()).to(grid_logits.dtype) / 255.0
         cbar = rearrange(cbar, "h w c -> c h w").to(grid_logits.device)
 

@@ -412,7 +412,7 @@ class ImageLogger(Callback):
                 "dtype": torch.get_autocast_gpu_dtype(),
                 "cache_enabled": torch.is_autocast_cache_enabled(),
             }
-            with torch.no_grad(), torch.cuda.amp.autocast(**gpu_autocast_kwargs):
+            with torch.no_grad(), torch.amp.autocast("cuda", **gpu_autocast_kwargs):
                 images = pl_module.log_images(
                     batch, split=split, **self.log_images_kwargs
                 )
@@ -446,7 +446,8 @@ class ImageLogger(Callback):
             check_idx > 0 or self.log_first_step
         ):
             try:
-                self.log_steps.pop(0)
+                if len(self.log_steps) > 0 and check_idx == self.log_steps[0]:
+                    self.log_steps.pop(0)
             except IndexError as e:
                 print(e)
                 pass
@@ -484,7 +485,7 @@ def init_wandb(save_dir, opt, config, group_name, name_str):
 
     os.environ["WANDB_DIR"] = save_dir
     if opt.debug:
-        wandb.init(project=opt.projectname, mode="offline", group=group_name)
+        wandb.init(project=opt.projectname, mode="offline", group=group_name, entity="multimodal-x2ct")
     else:
         wandb.init(
             project=opt.projectname,
@@ -492,6 +493,7 @@ def init_wandb(save_dir, opt, config, group_name, name_str):
             settings=wandb.Settings(code_dir="./sgm"),
             group=group_name,
             name=name_str,
+            entity="multimodal-x2ct"
         )
 
 
