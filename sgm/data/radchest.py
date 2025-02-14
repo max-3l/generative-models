@@ -722,6 +722,19 @@ class IndividualXrayWrapper(Dataset):
         projection_idx = idx % self.num_projections
         return dataset_item | { "projection_idx": projection_idx, "xray": dataset_item["xrays"][projection_idx] }
 
+class IndividualCTSliceWrapper(Dataset):
+    def __init__(self, dataset: Dataset, num_slices: int):
+        self.dataset = dataset
+        self.num_slices = num_slices
+
+    def __len__(self):
+        return len(self.dataset) * self.num_slices
+
+    def __getitem__(self, idx):
+        dataset_item = self.dataset[idx // self.num_slices]
+        slice_idx = idx % self.num_slices
+        return dataset_item | { "slice_idx": slice_idx, "ct_slice": dataset_item["ct"][..., slice_idx] }
+
 class Rescaler(Dataset):
     def __init__(self, dataset: Dataset):
         self.dataset = dataset
@@ -758,3 +771,25 @@ class RadchestIndividualXrayDataloader(LightningDataModule):
 
     def val_dataloader(self):
         return DataLoader(self.validation_dataset, batch_size=self.validation.loader.batch_size, shuffle=False, num_workers=self.validation.loader.num_workers)
+
+class RadchestIndividualCtSliceDataloader(LightningDataModule):
+    def __init__(self,
+        num_slices: int,
+        train: DictConfig,
+        validation: DictConfig,
+    ):
+        super().__init__()
+        self.train = train
+        self.validation = validation
+        self.num_slices = num_slices
+
+    def setup(self, stage: str) -> None:
+        print("Preparing datasets")
+        self.train_dataset = IndividualCTSliceWrapper(Rescaler(instantiate_from_config(self.train.dataset)), num_slices=self.num_slices)
+        self.validation_dataset = IndividualCTSliceWrapper(Rescaler(instantiate_from_config(self.validation.dataset)), num_slices=self.num_slices)
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.train.loader.batch_size, shuffle=self.train.loader.shuffle, num_workers=self.train.loader.num_workers, drop_last=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.validation_dataset, batch_size=self.validation.loader.batch_size, shuffle=self.validation.loader.shuffle, num_workers=self.validation.loader.num_workers)
