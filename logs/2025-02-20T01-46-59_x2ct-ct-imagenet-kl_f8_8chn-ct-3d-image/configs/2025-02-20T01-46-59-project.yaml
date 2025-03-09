@@ -1,0 +1,100 @@
+model:
+  base_learning_rate: 4.5e-06
+  target: sgm.models.autoencoder3d.AutoencodingEngine
+  params:
+    input_key: ct
+    monitor: val/loss/rec
+    disc_start_iter: 0
+    encoder_config:
+      target: sgm.modules.diffusionmodules.model3d.Encoder
+      params:
+        attn_type: vanilla-xformers
+        double_z: true
+        z_channels: 8
+        resolution: 128
+        in_channels: 1
+        out_ch: 1
+        ch: 32
+        ch_mult:
+        - 1
+        - 2
+        - 4
+        - 4
+        num_res_blocks: 2
+        attn_resolutions: []
+        dropout: 0.0
+    decoder_config:
+      target: sgm.modules.diffusionmodules.model3d.Decoder
+      params: ${model.params.encoder_config.params}
+    regularizer_config:
+      target: sgm.modules.autoencoding.regularizers.DiagonalGaussianRegularizer
+    loss_config:
+      target: sgm.modules.autoencoding.losses.discriminator_loss3d.GeneralLPIPSWithDiscriminator
+      params:
+        perceptual_weight: 0.25
+        disc_start: 20001
+        disc_weight: 0.5
+        learn_logvar: true
+        disc_in_channels: 1
+        dims: 128
+        lpips_on_x_dims: 16
+        regularization_weights:
+          kl_loss: 1.0
+data:
+  target: sgm.data.radchest.RadchestCT128Dataloader
+  params:
+    dtype: bfloat16
+    train:
+      loader:
+        batch_size: 8
+        num_workers: 8
+        shuffle: true
+      dataset:
+        target: sgm.data.radchest.CachedXCT_H5_dataset
+        params:
+          cache_dir: /raid/maximilian.schulze/dataset_cache
+          optimize_zip: true
+          h5_dataset_path: /raid/shared/x2ct/radchest/h5/sitk-dataset.h5
+          h5_ct_group_path: 512/ct
+          h5_xray_group_path: 512/drr
+          h5_text_dataset_path: /raid/shared/x2ct/radchest/discription-latents-h5/short-template.h5
+          h5_text_group_path: BiomedCLIPTextEmbedder/V2/OneNonNegativeTokens
+          split_file: /raid/shared/x2ct/radchest/train_val_split.json
+          train: true
+          scale: 256
+          scale_images: true
+          crop_size: 256
+          use_f16: true
+          ct_only: true
+          xray_only: false
+          load_text: true
+          num_projections: 2
+          is_preprocessed: false
+    validation:
+      loader:
+        batch_size: 8
+        num_workers: 8
+        shuffle: false
+      dataset:
+        target: sgm.data.radchest.CachedXCT_H5_dataset
+        params:
+          cache_dir: /raid/maximilian.schulze/dataset_cache
+          optimize_zip: true
+          h5_dataset_path: /raid/shared/x2ct/radchest/h5/sitk-dataset.h5
+          h5_ct_group_path: 512/ct
+          h5_xray_group_path: 512/drr
+          h5_text_dataset_path: /raid/shared/x2ct/radchest/discription-latents-h5/short-template.h5
+          h5_text_group_path: BiomedCLIPTextEmbedder/V2/OneNonNegativeTokens
+          split_file: /raid/shared/x2ct/radchest/train_val_split.json
+          train: false
+          scale: 256
+          scale_images: true
+          crop_size: 256
+          use_f16: true
+          ct_only: true
+          xray_only: false
+          load_text: true
+          num_projections: 2
+          is_preprocessed: false
+projectname: xray-stablediffusion
+wandb: true

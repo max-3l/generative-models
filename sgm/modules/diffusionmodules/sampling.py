@@ -52,6 +52,7 @@ class BaseDiffusionSampler:
         return x, s_in, sigmas, num_sigmas, cond, uc
 
     def denoise(self, x, denoiser, sigma, cond, uc):
+        # import pdb; pdb.set_trace()
         denoised = denoiser(*self.guider.prepare_inputs(x, sigma, cond, uc))
         denoised = self.guider(denoised, sigma)
         return denoised
@@ -111,7 +112,7 @@ class EDMSampler(SingleStepDiffusionSampler):
             x, cond, uc, num_steps
         )
 
-        for i in self.get_sigma_gen(num_sigmas):
+        for i in tqdm(self.get_sigma_gen(num_sigmas), leave=False, total=num_sigmas, desc="Sampling"):
             gamma = (
                 min(self.s_churn / (num_sigmas - 1), 2**0.5 - 1)
                 if self.s_tmin <= sigmas[i] <= self.s_tmax

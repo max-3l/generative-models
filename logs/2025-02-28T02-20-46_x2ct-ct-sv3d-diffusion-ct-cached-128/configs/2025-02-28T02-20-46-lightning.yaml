@@ -1,0 +1,29 @@
+lightning:
+  modelcheckpoint:
+    params:
+      every_n_train_steps: 250
+      save_on_train_epoch_end: true
+  trainer:
+    devices: 0,
+    benchmark: true
+    num_sanity_val_steps: 0
+    accumulate_grad_batches: 1
+    max_epochs: 1000
+    precision: bf16-true
+    accelerator: gpu
+  callbacks:
+    metrics_over_trainsteps_checkpoint:
+      params:
+        every_n_train_steps: 5000
+    image_logger:
+      target: main.ImageLogger
+      params:
+        disabled: false
+        batch_frequency: 1000
+        max_images: 64
+        increase_log_steps: true
+        log_first_step: true
+        log_images_kwargs:
+          use_ema_scope: false
+          'N': 64
+          n_rows: 8

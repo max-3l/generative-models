@@ -1,0 +1,16 @@
+{"time":"2025-02-17T00:45:50.862857007+01:00","level":"INFO","msg":"stream: starting","core version":"0.19.6","symlink path":"/raid/maximilian.schulze/generative-models/logs/2025-02-17T00-45-45_x2ct-xray-diffusion-kl_f8_8-xray/wandb/run-20250217_004550-t943crzo/logs/debug-core.log"}
+{"time":"2025-02-17T00:45:55.895048844+01:00","level":"INFO","msg":"created new stream","id":"t943crzo"}
+{"time":"2025-02-17T00:45:55.895082004+01:00","level":"INFO","msg":"stream: started","id":"t943crzo"}
+{"time":"2025-02-17T00:45:55.895093637+01:00","level":"INFO","msg":"writer: Do: started","stream_id":"t943crzo"}
+{"time":"2025-02-17T00:45:55.895099181+01:00","level":"INFO","msg":"handler: started","stream_id":"t943crzo"}
+{"time":"2025-02-17T00:45:55.89510958+01:00","level":"INFO","msg":"sender: started","stream_id":"t943crzo"}
+{"time":"2025-02-17T00:45:56.126271537+01:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-02-17T20:40:50.484757388+01:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-02-17T20:40:50.48495507+01:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-02-17T20:40:51.44219362+01:00","level":"INFO","msg":"handler: operation stats","stats":{"operations":[{"desc":"uploading output.log","runtime_seconds":0.666017644,"progress":"11.7KB/11.7KB"},{"desc":"uploading config.yaml","runtime_seconds":0.511491409,"progress":"8.4KB/8.4KB"}],"total_operations":2}}
+{"time":"2025-02-17T20:40:51.48914286+01:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-02-17T20:40:52.690952248+01:00","level":"INFO","msg":"stream: closing","id":"t943crzo"}
+{"time":"2025-02-17T20:40:52.690984571+01:00","level":"INFO","msg":"handler: closed","stream_id":"t943crzo"}
+{"time":"2025-02-17T20:40:52.690996937+01:00","level":"INFO","msg":"writer: Close: closed","stream_id":"t943crzo"}
+{"time":"2025-02-17T20:40:52.691064204+01:00","level":"INFO","msg":"sender: closed","stream_id":"t943crzo"}
+{"time":"2025-02-17T20:40:52.691071755+01:00","level":"INFO","msg":"stream: closed","id":"t943crzo"}

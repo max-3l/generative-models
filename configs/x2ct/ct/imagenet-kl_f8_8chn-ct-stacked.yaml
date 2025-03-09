@@ -1,8 +1,8 @@
 model:
-  base_learning_rate: 4.5e-6
+  base_learning_rate: 4.5e-4
   target: sgm.models.autoencoder.AutoencodingEngine
   params:
-    input_key: xray
+    input_key: ct_slice
     monitor: val/loss/rec
     disc_start_iter: 0
 
@@ -46,13 +46,14 @@ data:
     num_slices: 256
     train:
       loader:
-          batch_size: 16
-          num_workers: 8
+          batch_size: 64
+          num_workers: 16
           shuffle: True
       dataset:
         target: sgm.data.radchest.CachedXCT_H5_dataset
         params:
           cache_dir: /raid/maximilian.schulze/dataset_cache
+          optimize_zip: True
           h5_dataset_path: /raid/shared/x2ct/radchest/h5/sitk-dataset.h5
           h5_ct_group_path: 512/ct
           h5_xray_group_path: 512/drr
@@ -72,12 +73,13 @@ data:
     validation:
       loader:
         batch_size: 64
-        num_workers: 8
+        num_workers: 16
         shuffle: True
       dataset:
         target: sgm.data.radchest.CachedXCT_H5_dataset
         params:
           cache_dir: /raid/maximilian.schulze/dataset_cache
+          optimize_zip: True
           h5_dataset_path: /raid/shared/x2ct/radchest/h5/sitk-dataset.h5
           h5_ct_group_path: 512/ct
           h5_xray_group_path: 512/drr
@@ -125,5 +127,5 @@ lightning:
     accumulate_grad_batches: 1
     val_check_interval: 5000
 
-projectname: xray-stablediffusion
+projectname: ct-stablediffusion
 wandb: True

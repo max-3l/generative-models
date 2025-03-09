@@ -1,0 +1,1 @@
+/raid/maximilian.schulze/generative-models/logs/2025-02-27T01-13-21_x2ct-ct-sv3d-diffusion-ct-cached/checkpoints/last-v1.ckpt

@@ -1,0 +1,237 @@
+model:
+  base_learning_rate: 1.0e-06
+  target: sgm.models.diffusion.DiffusionEngine
+  params:
+    input_key: ct_video
+    num_frames: 128
+    network_wrapper: sgm.modules.diffusionmodules.wrappers.OpenAIVideoWrapper
+    scale_factor: 0.18215
+    disable_first_stage_autocast: true
+    en_and_decode_n_samples_a_time: 32
+    log_keys:
+    - xrays
+    scheduler_config:
+      target: sgm.lr_scheduler.LambdaLinearScheduler
+      params:
+        warm_up_steps:
+        - 10000
+        cycle_lengths:
+        - 10000000000000
+        f_start:
+        - 1.0e-06
+        f_max:
+        - 1.0
+        f_min:
+        - 1.0
+    denoiser_config:
+      target: sgm.modules.diffusionmodules.denoiser.Denoiser
+      params:
+        scaling_config:
+          target: sgm.modules.diffusionmodules.denoiser_scaling.VScalingWithEDMcNoise
+    loss_fn_config:
+      target: sgm.modules.diffusionmodules.loss.StandardDiffusionLoss
+      params:
+        batch2model_keys:
+        - image_only_indicator
+        loss_weighting_config:
+          target: sgm.modules.diffusionmodules.loss_weighting.EpsWeighting
+        sigma_sampler_config:
+          target: sgm.modules.diffusionmodules.sigma_sampling.DiscreteSampling
+          params:
+            num_idx: 1000
+            discretization_config:
+              target: sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization
+    network_config:
+      target: sgm.modules.diffusionmodules.video_model.VideoUNet
+      params:
+        adm_in_channels: 256
+        num_classes: sequential
+        use_checkpoint: true
+        in_channels: 24
+        out_channels: 8
+        model_channels: 320
+        attention_resolutions:
+        - 4
+        - 2
+        - 1
+        num_res_blocks: 2
+        channel_mult:
+        - 1
+        - 2
+        - 4
+        - 4
+        num_head_channels: 64
+        use_linear_in_transformer: true
+        transformer_depth: 1
+        context_dim: 512
+        spatial_transformer_attn_type: softmax-xformers
+        extra_ff_mix_layer: true
+        use_spatial_context: true
+        merge_strategy: learned_with_images
+        video_kernel_size:
+        - 3
+        - 1
+        - 1
+    conditioner_config:
+      target: sgm.modules.GeneralConditioner
+      params:
+        emb_models:
+        - input_key: xrays
+          is_trainable: false
+          target: sgm.modules.encoders.modules.FrozenOpenCLIPImagePredictionEmbedderXrays
+          params:
+            open_clip_embedding_config:
+              target: sgm.modules.encoders.modules.FrozenOpenCLIPImageEmbedderMedical
+              params: {}
+        - input_key: xrays
+          is_trainable: false
+          target: sgm.modules.encoders.modules.VideoPredictionEmbedderWithEncoder
+          params:
+            disable_encoder_autocast: true
+            n_cond_frames: 2
+            n_copies: 1
+            is_ae: true
+            encoder_config:
+              target: sgm.models.autoencoder.AutoencodingEngine
+              params:
+                ckpt_engine: /raid/maximilian.schulze/generative-models/logs/2025-02-24T17-19-59_x2ct-xray-imagenet-kl_f8_8chn-xray-128/checkpoints/epoch=000502.ckpt
+                loss_config:
+                  target: torch.nn.Identity
+                regularizer_config:
+                  target: sgm.modules.autoencoding.regularizers.DiagonalGaussianRegularizer
+                encoder_config:
+                  target: sgm.modules.diffusionmodules.model.Encoder
+                  params:
+                    attn_type: vanilla-xformers
+                    double_z: true
+                    z_channels: 8
+                    resolution: 128
+                    in_channels: 1
+                    out_ch: 1
+                    ch: 128
+                    ch_mult:
+                    - 1
+                    - 2
+                    - 4
+                    - 4
+                    num_res_blocks: 2
+                    attn_resolutions: []
+                    dropout: 0.0
+                decoder_config:
+                  target: sgm.modules.diffusionmodules.model.Decoder
+                  params: ${model.params.first_stage_config.params.encoder_config.params}
+        - input_key: cond_aug
+          is_trainable: false
+          target: sgm.modules.encoders.modules.ConcatTimestepEmbedderNDCT
+          params:
+            outdim: 256
+        - is_trainable: true
+          input_key: raw_text
+          target: sgm.modules.encoders.modules.TrainableConditioningProjection
+          params:
+            input_dim: 768
+            output_dim: 512
+            freeze_model: true
+            model:
+              target: sgm.modules.encoders.modules.FrozenOpenCLIPEmbedderMedical
+              params:
+                freeze: true
+                layer: last
+    first_stage_config:
+      target: sgm.models.autoencoder.AutoencodingEngine
+      params:
+        ckpt_engine: /raid/maximilian.schulze/generative-models/logs/2025-02-24T17-42-07_x2ct-ct-imagenet-kl_f8_8chn-ct-stacked128/checkpoints/epoch=000005-v1.ckpt
+        loss_config:
+          target: torch.nn.Identity
+        regularizer_config:
+          target: sgm.modules.autoencoding.regularizers.DiagonalGaussianRegularizer
+        encoder_config:
+          target: sgm.modules.diffusionmodules.model.Encoder
+          params:
+            attn_type: vanilla-xformers
+            double_z: true
+            z_channels: 8
+            resolution: 128
+            in_channels: 1
+            out_ch: 1
+            ch: 128
+            ch_mult:
+            - 1
+            - 2
+            - 4
+            - 4
+            num_res_blocks: 2
+            attn_resolutions: []
+            dropout: 0.0
+        decoder_config:
+          target: sgm.modules.diffusionmodules.model.Decoder
+          params: ${model.params.first_stage_config.params.encoder_config.params}
+    sampler_config:
+      target: sgm.modules.diffusionmodules.sampling.EulerEDMSampler
+      params:
+        num_steps: 31
+        discretization_config:
+          target: sgm.modules.diffusionmodules.discretizer.EDMDiscretization
+          params:
+            sigma_max: 700.0
+        guider_config:
+          target: sgm.modules.diffusionmodules.guiders.TrianglePredictionGuider
+          params:
+            max_scale: 2.5
+            num_frames: 128
+data:
+  target: sgm.data.radchest.RadchestCTVideo128Dataloader
+  params:
+    num_slices: 128
+    train:
+      loader:
+        batch_size: 12
+        num_workers: 32
+        shuffle: true
+      dataset:
+        target: sgm.data.radchest.CachedXCT_H5_dataset
+        params:
+          cache_dir: /raid/maximilian.schulze/dataset_cache
+          optimize_zip: true
+          h5_dataset_path: /raid/shared/x2ct/radchest/h5/sitk-dataset.h5
+          h5_ct_group_path: 512/ct
+          h5_xray_group_path: 512/drr
+          h5_text_dataset_path: /raid/shared/x2ct/radchest/discription-latents-h5/short-template.h5
+          h5_text_group_path: BiomedCLIPTextEmbedder/V2/OneNonNegativeTokens
+          split_file: /raid/shared/x2ct/radchest/train_val_split.json
+          train: true
+          scale: 256
+          scale_images: true
+          crop_size: 256
+          use_f16: false
+          ct_only: false
+          xray_only: false
+          load_text: true
+          num_projections: 2
+          is_preprocessed: false
+    validation:
+      loader:
+        batch_size: 12
+        num_workers: 32
+        shuffle: false
+      dataset:
+        target: sgm.data.radchest.CachedXCT_H5_dataset
+        params:
+          cache_dir: /raid/maximilian.schulze/dataset_cache
+          optimize_zip: true
+          h5_dataset_path: /raid/shared/x2ct/radchest/h5/sitk-dataset.h5
+          h5_ct_group_path: 512/ct
+          h5_xray_group_path: 512/drr
+          h5_text_dataset_path: /raid/shared/x2ct/radchest/discription-latents-h5/short-template.h5
+          h5_text_group_path: BiomedCLIPTextEmbedder/V2/OneNonNegativeTokens
+          split_file: /raid/shared/x2ct/radchest/train_val_split.json
+          train: false
+          scale: 256
+          scale_images: true
+          crop_size: 256
+          use_f16: false
+          ct_only: false
+          xray_only: false
+          load_text: true
+          num_projections: 2
+          is_preprocessed: false

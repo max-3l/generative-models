@@ -7,6 +7,8 @@ import sys
 from inspect import Parameter
 from typing import Union
 
+from einops import rearrange
+import imageio
 import numpy as np
 import pytorch_lightning as pl
 import torch
@@ -349,7 +351,36 @@ class ImageLogger(Callback):
     ):
         root = os.path.join(save_dir, "images", split)
         for k in images:
-            if isheatmap(images[k]):
+            if k == "video_comparison":
+                video = images[k]
+                grid  = torchvision.utils.make_grid(video, nrow=1)
+                grid = (grid * 255).cpu().numpy(force=True).astype(np.uint8)
+                filename = "{}_gs-{:06}_e-{:06}_b-{:06}.mp4".format(
+                    k, global_step, current_epoch, batch_idx
+                )
+                os.makedirs(root, exist_ok=True)
+                path = os.path.join(root, filename)
+                imageio.mimwrite(path, grid, fps=8, macro_block_size=1)
+
+            elif k.startswith("video_"):
+                videos = images[k]
+                t = videos.shape[1]
+                grid = torchvision.utils.make_grid(rearrange(videos, "b t c h w -> b (t c) h w"), nrow=4)
+                grid = rearrange(grid, "(t c) h w -> t h w c", t=t)
+                if self.rescale:
+                    grid = (grid + 1) / 2
+                grid = ((grid * 255).clamp(0, 255).cpu()
+                    .numpy()
+                    .astype(np.uint8)
+                )
+                filename = "{}_gs-{:06}_e-{:06}_b-{:06}.mp4".format(
+                    k, global_step, current_epoch, batch_idx
+                )
+                os.makedirs(root, exist_ok=True)
+                path = os.path.join(root, filename)
+                imageio.mimwrite(path, grid, fps=8, macro_block_size=1)
+
+            elif isheatmap(images[k]):
                 fig, ax = plt.subplots()
                 ax = ax.matshow(
                     images[k].cpu().numpy(), cmap="hot", interpolation="lanczos"
@@ -366,7 +397,11 @@ class ImageLogger(Callback):
                 plt.close()
                 # TODO: support wandb
             else:
-                grid = torchvision.utils.make_grid(images[k], nrow=4)
+                # Adapt for ct
+                if len(images[k].shape) == 5:
+                    grid = torchvision.utils.make_grid(images[k].mean(-1), nrow=4)
+                else:
+                    grid = torchvision.utils.make_grid(images[k], nrow=4)
                 if self.rescale:
                     grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
                 grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
@@ -377,7 +412,10 @@ class ImageLogger(Callback):
                 )
                 path = os.path.join(root, filename)
                 os.makedirs(os.path.split(path)[0], exist_ok=True)
-                img = Image.fromarray(grid)
+                if grid.shape[-1] != 1 or grid.shape[-1] != 3:
+                    img = Image.fromarray(grid[:,:,0])
+                else:
+                    img = Image.fromarray(grid)
                 img.save(path)
                 if exists(pl_module):
                     assert isinstance(
@@ -495,7 +533,6 @@ def init_wandb(save_dir, opt, config, group_name, name_str):
             name=name_str,
             entity="multimodal-x2ct"
         )
-
 
 if __name__ == "__main__":
     # custom parser to specify config files, train, test and debug mode,
@@ -685,6 +722,7 @@ if __name__ == "__main__":
                 "params": {
                     "name": "testtube",  # hack for sbord fanatics
                     "save_dir": logdir,
+                    "flush_logs_every_n_steps": 50,
                 },
             },
         }
@@ -700,7 +738,7 @@ if __name__ == "__main__":
                 os.path.join(os.getcwd(), logdir),
                 opt=opt,
                 group_name=group_name,
-                config=config,
+                config=OmegaConf.to_container(config, resolve=True),
                 name_str=nowname,
             )
         if "logger" in lightning_config:
@@ -750,7 +788,7 @@ if __name__ == "__main__":
         print(
             f"strategy config: \n ++++++++++++++ \n {strategy_cfg} \n ++++++++++++++ "
         )
-        trainer_kwargs["strategy"] = instantiate_from_config(strategy_cfg)
+        # trainer_kwargs["strategy"] = instantiate_from_config(strategy_cfg)
 
         # add callback which sets up log directory
         default_callbacks_cfg = {
@@ -824,8 +862,12 @@ if __name__ == "__main__":
         trainer_kwargs = {
             key: val for key, val in trainer_kwargs.items() if key not in trainer_opt
         }
+        print("Trainer opt:", trainer_opt)
+        print(f"Trainer kwargs: {trainer_kwargs}")
+
         trainer = Trainer(**trainer_opt, **trainer_kwargs)
 
+        print(trainer)
         trainer.logdir = logdir  ###
 
         # data
@@ -899,7 +941,7 @@ if __name__ == "__main__":
         # run
         if opt.train:
             try:
-                trainer.fit(model, data, ckpt_path=ckpt_resume_path)
+                trainer.fit(model, datamodule=data, ckpt_path=ckpt_resume_path)
             except Exception:
                 if not opt.debug:
                     melk()

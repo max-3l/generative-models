@@ -2,6 +2,9 @@ from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import hashlib
 import pickle
+from typing import Optional
+import zipfile
+from einops import rearrange
 import h5py
 import hdf5plugin
 import json
@@ -10,6 +13,7 @@ import os
 from pathlib import Path
 import time
 
+import pandas as pd
 import torch
 import torch.nn as nn
 import numpy as np
@@ -424,6 +428,8 @@ class CT_Rate_dataset(XCT_H5_dataset):
             assert os.path.exists(h5_text_dataset_path), f"Error: {h5_text_dataset_path} not found!"
             self.h5_text_dataset_path = Path(h5_text_dataset_path)
             self.h5_text_group_path = h5_text_group_path.split('/')
+            raw_text_path = "/raid/shared/x2ct/ct-rate-models/train_reports.csv" if train else "/raid/shared/x2ct/ct-rate-models/validation_reports.csv"
+            self.raw_text_csv = pd.read_csv(raw_text_path, index_col="VolumeName")
         else:
             logging.info("Not loading text data.")
 
@@ -573,6 +579,46 @@ class CT_Rate_dataset(XCT_H5_dataset):
                 index = list(range(self.num_projections))
             xray = [np.array(xray_group[str(i)]).astype(np.float32) for i in index]
         return xray
+    
+
+    def load_text_data(self, name: str) -> dict:
+        """
+        Load text embeddings from the H5 file. If the item name points to a `Dataset` the
+        data is loaded as is. If the item name points to a `Group` the data is loaded
+        as a stack of multiple embeddings.
+
+        The format is 1xN for a single token and MxN for multiple embeddings, where N is the
+        token embedding dimension and M is the number of embeddings in the group.
+
+        Args:
+            name (str): The name of the item to load in the H5 file.
+
+        Returns:
+            dict: A dictionary containing the loaded and preprocessed text data.
+        """
+        with h5py.File(self.h5_text_dataset_path, 'r') as h5:
+            group = h5
+            name = name + "_a_1.nii.gz"
+            for comp in self.h5_text_group_path:
+                group = group[comp.replace("{split}", self.split).replace("{name}", name)]
+            if isinstance(group, h5py.Dataset):
+                # If the data is a single dataset, return it as is and add a new axis.
+                # This allows us to iterate over the data in the same way as if it was a group of multiple embeddings.
+                text_data = np.array(group).astype(np.float32)
+                if len(text_data.shape) == 2:
+                    text_data = text_data[np.newaxis, :]
+            else:
+                text_embeddings = [np.array(group[name]).astype(np.float32) for name in group]
+                # text_data = np.stack(text_embeddings, axis=0)
+                text_data = text_embeddings
+
+            group = h5
+            for comp in self.h5_ct_clip_normalized_text_group_path:
+                group = group[comp.replace("{split}", self.split).replace("{name}", name)]
+            normalized_ct_clip_text = np.array(group).astype(np.float32).flatten()
+            raw_text = self.raw_text_csv.loc[name]["Findings_EN"]
+
+        return { 'text': text_data, 'normalized_ct_clip_text': normalized_ct_clip_text, "raw_text": raw_text }
 
 class XRAY_dataset(XCT_H5_dataset):
     """
@@ -628,29 +674,38 @@ class XRAY_dataset(XCT_H5_dataset):
         return data | xray_data
 
 class CachedXCT_H5_dataset(torch.utils.data.Dataset):
-    def __init__(self, cache_dir: str, *args, **kwargs):
+    def __init__(self, cache_dir: str, optimize_zip: bool, *args, **kwargs):
         base_dataset = XCT_H5_dataset
+        self.optimize_zip = optimize_zip
         self.cache_dir = Path(cache_dir)
         self.cache_hash = self._compute_hash(base_dataset, args, kwargs)
         self.cache_path = self.cache_dir / self.cache_hash
+        print("Dataset cache path:", self.cache_path)
         self.status_file = self.cache_path / "_status.txt"
         self.check_and_build_cache(base_dataset, args, kwargs)
         self.length = self.compute_length()
 
     def _compute_hash(self, base_dataset, args, kwargs):
         hash_input = str(base_dataset) + str(args) + str(kwargs)
+        if self.optimize_zip:
+            hash_input += "zip"
         return hashlib.md5(hash_input.encode()).hexdigest()
 
     def _build_cache(self, base_dataset, args, kwargs):
         self.cache_path.mkdir(parents=True, exist_ok=True)
         dataset = base_dataset(*args, **kwargs)
-        
+
         def process_item(idx):
             item = dataset[idx]
-            item_path = self.cache_path / f"{idx}.pkl"
-            with open(item_path, 'wb') as f:
-                pickle.dump(item, f)
-        
+            item_path = self.cache_path / f"{idx}"
+            if self.optimize_zip:
+                with zipfile.ZipFile(item_path.with_suffix(".zip"), 'w', compression=zipfile.ZIP_DEFLATED) as z:
+                    with z.open('data.pkl', 'w') as f:
+                        pickle.dump(item, f)
+            else:
+                with open(item_path.with_suffix(".pkl"), 'wb') as f:
+                    pickle.dump(item, f)
+
         with ThreadPoolExecutor() as executor:
             list(tqdm.tqdm(executor.map(process_item, range(len(dataset))), total=len(dataset), desc=f"Building cache {self.cache_path}"))
         
@@ -672,14 +727,22 @@ class CachedXCT_H5_dataset(torch.utils.data.Dataset):
             if not self.status_file.exists():
                 self._build_cache(base_dataset, args, kwargs)
             fcntl.flock(f, fcntl.LOCK_UN)
-    
+
     def compute_length(self):
+        if self.optimize_zip:
+            return len(list(self.cache_path.glob("*.zip")))
         return len(list(self.cache_path.glob("*.pkl")))
 
     def __getitem__(self, idx):
-        item_path = self.cache_path / f"{idx}.pkl"
-        with open(item_path, 'rb') as f:
-            item = pickle.load(f)
+        if self.optimize_zip:
+            item_path = self.cache_path / f"{idx}.zip"
+            with zipfile.ZipFile(item_path, 'r') as z:
+                with z.open('data.pkl', 'r') as f:
+                    item = pickle.load(f)
+        else:
+            item_path = self.cache_path / f"{idx}.pkl"
+            with open(item_path, 'rb') as f:
+                item = pickle.load(f)
         return item
 
     def __len__(self):
@@ -733,7 +796,47 @@ class IndividualCTSliceWrapper(Dataset):
     def __getitem__(self, idx):
         dataset_item = self.dataset[idx // self.num_slices]
         slice_idx = idx % self.num_slices
-        return dataset_item | { "slice_idx": slice_idx, "ct_slice": dataset_item["ct"][..., slice_idx] }
+        dataset = dataset_item | { "slice_idx": slice_idx, "ct_slice": dataset_item["ct"][..., slice_idx] }
+        return dataset
+
+class CTVideoWrapper(Dataset):
+    def __init__(self, dataset: Dataset, train=True):
+        self.dataset = dataset
+        # text_path = "/raid/shared/x2ct/ct-rate-models/train_reports.csv" if train else "/raid/shared/x2ct/ct-rate-models/validation_reports.csv"
+        text_path = "/raid/maximilian.schulze/masterthesis/radchest-label-generator/python/radchest-labels-one-no-negations.json"
+        raw_text_path_csv = "/raid/shared/x2ct/ct-rate-models/train_reports.csv" if train else "/raid/shared/x2ct/ct-rate-models/validation_reports.csv"
+        self.raw_text_csv = pd.read_csv(raw_text_path_csv, index_col="VolumeName")
+        with open(text_path, "r") as f:
+            self.raw_text_json_radchest = json.load(f)
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        dataset_item = self.dataset[idx]
+        ct_video = rearrange(dataset_item["ct"], "c h w d -> d c h w")
+        # assert ct_video.shape == torch.Size((256, 1, 256, 256)), f"CT video shape is {ct_video.shape}"
+        xrays = dataset_item["xrays"]
+        cond_aug = torch.tensor([1e-5]) # 1e-5
+        xrays_noisy = torch.randn_like(xrays) * cond_aug + xrays
+        return dataset_item | {
+            "ct_video": ct_video,
+            "xrays_noisy": xrays_noisy,
+            "cond_aug": cond_aug.repeat(ct_video.shape[0]),
+            "image_only_indicator": torch.zeros(ct_video.shape[0]),
+            "raw_text": self.raw_text_json_radchest[dataset_item["scan_id"]]
+        }
+
+class ZAsDepthWrapper(Dataset):
+    def __init__(self, dataset: Dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        dataset_item = self.dataset[idx]
+        return dataset_item | { "ct_z_depth": rearrange(dataset_item["ct"], "c h w d -> c d h w").squeeze(0).float() }
 
 class Rescaler(Dataset):
     def __init__(self, dataset: Dataset):
@@ -787,6 +890,155 @@ class RadchestIndividualCtSliceDataloader(LightningDataModule):
         print("Preparing datasets")
         self.train_dataset = IndividualCTSliceWrapper(Rescaler(instantiate_from_config(self.train.dataset)), num_slices=self.num_slices)
         self.validation_dataset = IndividualCTSliceWrapper(Rescaler(instantiate_from_config(self.validation.dataset)), num_slices=self.num_slices)
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.train.loader.batch_size, shuffle=self.train.loader.shuffle, num_workers=self.train.loader.num_workers, drop_last=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.validation_dataset, batch_size=self.validation.loader.batch_size, shuffle=self.validation.loader.shuffle, num_workers=self.validation.loader.num_workers)
+
+class RadchestCTAsDepthDataloader(LightningDataModule):
+    def __init__(self,
+        train: DictConfig,
+        validation: DictConfig,
+    ):
+        super().__init__()
+        self.train = train
+        self.validation = validation
+
+    def setup(self, stage: str) -> None:
+        print("Preparing datasets")
+        self.train_dataset = ZAsDepthWrapper(Rescaler(instantiate_from_config(self.train.dataset)))
+        self.validation_dataset = ZAsDepthWrapper(Rescaler(instantiate_from_config(self.validation.dataset)))
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.train.loader.batch_size, shuffle=self.train.loader.shuffle, num_workers=self.train.loader.num_workers, drop_last=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.validation_dataset, batch_size=self.validation.loader.batch_size, shuffle=self.validation.loader.shuffle, num_workers=self.validation.loader.num_workers)
+
+class Resize128(Dataset):
+    def __init__(self, dataset: Dataset, dtype: str = "float32"):
+        self.dataset = dataset
+        self.dtype = torch.bfloat16 if dtype == "bfloat16" else torch.float32
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        item = self.dataset[idx]
+        if "ct" in item:
+            item["ct"] = nn.functional.interpolate(item["ct"].unsqueeze(0), size=(128, 128, 128), mode='trilinear').squeeze(0).to(dtype=self.dtype)
+        if "xrays" in item:
+            item["xrays"] = nn.functional.interpolate(item["xrays"], size=(128, 128), mode='bilinear').to(dtype=self.dtype)
+        return item
+
+class RadchestCT128Dataloader(LightningDataModule):
+    def __init__(self,
+        train: DictConfig,
+        validation: DictConfig,
+        dtype: str,
+    ):
+        super().__init__()
+        self.train = train
+        self.validation = validation
+        self.dtype = dtype
+
+    def setup(self, stage: str) -> None:
+        print("Preparing datasets")
+        self.train_dataset = Resize128(Rescaler(instantiate_from_config(self.train.dataset)), self.dtype)
+        self.validation_dataset = Resize128(Rescaler(instantiate_from_config(self.validation.dataset)), self.dtype)
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.train.loader.batch_size, shuffle=self.train.loader.shuffle, num_workers=self.train.loader.num_workers, drop_last=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.validation_dataset, batch_size=self.validation.loader.batch_size, shuffle=self.validation.loader.shuffle, num_workers=self.validation.loader.num_workers)
+
+class RadchestIndividualCtSlice128Dataloader(LightningDataModule):
+    def __init__(self,
+        num_slices: int,
+        train: DictConfig,
+        validation: DictConfig,
+    ):
+        super().__init__()
+        self.train = train
+        self.validation = validation
+        self.num_slices = num_slices
+
+    def setup(self, stage: str) -> None:
+        print("Preparing datasets")
+        self.train_dataset = IndividualCTSliceWrapper(Resize128(Rescaler(instantiate_from_config(self.train.dataset))), num_slices=self.num_slices)
+        self.validation_dataset = IndividualCTSliceWrapper(Resize128(Rescaler(instantiate_from_config(self.validation.dataset))), num_slices=self.num_slices)
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.train.loader.batch_size, shuffle=self.train.loader.shuffle, num_workers=self.train.loader.num_workers, drop_last=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.validation_dataset, batch_size=self.validation.loader.batch_size, shuffle=self.validation.loader.shuffle, num_workers=self.validation.loader.num_workers)
+
+class ConditionCacheEnricher(Dataset):
+    def __init__(self, dataset: Dataset, condition_cache: dict, split):
+        self.dataset = dataset
+        self.condition_cache = Path(condition_cache) / split
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        item = self.dataset[idx]
+        scan_id = item["scan_id"]
+        condition_info = torch.load(self.condition_cache / (scan_id + ".pt"), map_location="cpu")
+        assert scan_id == condition_info["scan_id"], f"Scan ID mismatch: {scan_id} != {condition_info['scan_id']}"
+        return condition_info | item
+
+class RadchestCTVideoDataloader(LightningDataModule):
+    def __init__(self,
+        num_slices: int,
+        train: DictConfig,
+        validation: DictConfig,
+        condition_cache_path: Optional[str] = None
+    ):
+        super().__init__()
+        self.train = train
+        self.validation = validation
+        self.num_slices = num_slices
+        self.condition_cache_path = Path(condition_cache_path) if condition_cache_path is not None else None
+
+    def setup(self, stage: str) -> None:
+        print("Preparing datasets")
+        self.train_dataset = CTVideoWrapper(Rescaler(instantiate_from_config(self.train.dataset)))
+        self.validation_dataset = CTVideoWrapper(Rescaler(instantiate_from_config(self.validation.dataset)))
+        if self.condition_cache_path is not None:
+            self.train_dataset = ConditionCacheEnricher(self.train_dataset, self.condition_cache_path, split="train")
+            self.validation_dataset = ConditionCacheEnricher(self.validation_dataset, self.condition_cache_path, split="valid")
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.train.loader.batch_size, shuffle=self.train.loader.shuffle, num_workers=self.train.loader.num_workers, drop_last=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.validation_dataset, batch_size=self.validation.loader.batch_size, shuffle=self.validation.loader.shuffle, num_workers=self.validation.loader.num_workers)
+
+class RadchestCTVideo128Dataloader(LightningDataModule):
+    def __init__(self,
+        num_slices: int,
+        train: DictConfig,
+        validation: DictConfig,
+        condition_cache_path: Optional[str] = None
+    ):
+        super().__init__()
+        self.train = train
+        self.validation = validation
+        self.num_slices = num_slices
+        self.condition_cache_path = Path(condition_cache_path) if condition_cache_path is not None else None
+
+    def setup(self, stage: str) -> None:
+        print("Preparing datasets")
+        self.train_dataset = CTVideoWrapper(Resize128(Rescaler(instantiate_from_config(self.train.dataset))))
+        self.validation_dataset = CTVideoWrapper(Resize128(Rescaler(instantiate_from_config(self.validation.dataset))))
+        if self.condition_cache_path is not None:
+            self.train_dataset = ConditionCacheEnricher(self.train_dataset, self.condition_cache_path, split="train")
+            self.validation_dataset = ConditionCacheEnricher(self.validation_dataset, self.condition_cache_path, split="valid")
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.train.loader.batch_size, shuffle=self.train.loader.shuffle, num_workers=self.train.loader.num_workers, drop_last=True)

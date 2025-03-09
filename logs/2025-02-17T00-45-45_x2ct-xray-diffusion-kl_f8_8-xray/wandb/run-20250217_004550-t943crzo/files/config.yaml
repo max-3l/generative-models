@@ -1,0 +1,213 @@
+_wandb:
+    value:
+        cli_version: 0.19.6
+        m: []
+        python_version: 3.10.16
+        t:
+            "1":
+                - 1
+                - 9
+                - 11
+                - 41
+                - 49
+                - 55
+                - 63
+                - 79
+                - 103
+                - 105
+            "2":
+                - 1
+                - 9
+                - 11
+                - 41
+                - 49
+                - 55
+                - 63
+                - 79
+                - 103
+                - 105
+            "3":
+                - 2
+                - 13
+                - 16
+                - 23
+                - 55
+            "4": 3.10.16
+            "5": 0.19.6
+            "6": 4.19.1
+            "8":
+                - 5
+            "12": 0.19.6
+            "13": linux-x86_64
+data:
+    value:
+        params:
+            num_projections: 2
+            train:
+                dataset:
+                    params:
+                        cache_dir: /raid/maximilian.schulze/dataset_cache
+                        crop_size: 256
+                        ct_only: false
+                        h5_ct_group_path: 512/ct
+                        h5_dataset_path: /raid/shared/x2ct/radchest/h5/sitk-dataset.h5
+                        h5_text_dataset_path: /raid/shared/x2ct/radchest/discription-latents-h5/short-template.h5
+                        h5_text_group_path: BiomedCLIPTextEmbedder/V2/OneNonNegativeTokens
+                        h5_xray_group_path: 512/drr
+                        is_preprocessed: false
+                        load_text: true
+                        num_projections: 2
+                        optimize_zip: false
+                        scale: 256
+                        scale_images: true
+                        split_file: /raid/shared/x2ct/radchest/train_val_split.json
+                        train: true
+                        use_f16: false
+                        xray_only: true
+                    target: sgm.data.radchest.CachedXCT_H5_dataset
+                loader:
+                    batch_size: 64
+                    num_workers: 8
+            validation:
+                dataset:
+                    params:
+                        cache_dir: /raid/maximilian.schulze/dataset_cache
+                        crop_size: 256
+                        ct_only: false
+                        h5_ct_group_path: 512/ct
+                        h5_dataset_path: /raid/shared/x2ct/radchest/h5/sitk-dataset.h5
+                        h5_text_dataset_path: /raid/shared/x2ct/radchest/discription-latents-h5/short-template.h5
+                        h5_text_group_path: BiomedCLIPTextEmbedder/V2/OneNonNegativeTokens
+                        h5_xray_group_path: 512/drr
+                        is_preprocessed: false
+                        load_text: true
+                        num_projections: 2
+                        optimize_zip: false
+                        scale: 256
+                        scale_images: true
+                        split_file: /raid/shared/x2ct/radchest/train_val_split.json
+                        train: false
+                        use_f16: false
+                        xray_only: true
+                    target: sgm.data.radchest.CachedXCT_H5_dataset
+                loader:
+                    batch_size: 64
+                    num_workers: 8
+        target: sgm.data.radchest.RadchestIndividualXrayDataloader
+model:
+    value:
+        base_learning_rate: 1e-05
+        params:
+            denoiser_config:
+                params:
+                    discretization_config:
+                        target: sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization
+                    num_idx: 1000
+                    scaling_config:
+                        target: sgm.modules.diffusionmodules.denoiser_scaling.EpsScaling
+                target: sgm.modules.diffusionmodules.denoiser.DiscreteDenoiser
+            disable_first_stage_autocast: true
+            first_stage_config:
+                params:
+                    ckpt_engine: /raid/maximilian.schulze/generative-models/logs/2025-02-13T19-45-44_x2ct-xray-imagenet-kl_f8_8chn-xray/checkpoints/epoch=000968.ckpt
+                    decoder_config:
+                        params:
+                            attn_resolutions: []
+                            attn_type: vanilla-xformers
+                            ch: 128
+                            ch_mult:
+                                - 1
+                                - 2
+                                - 4
+                                - 4
+                            double_z: true
+                            dropout: 0
+                            in_channels: 1
+                            num_res_blocks: 2
+                            out_ch: 1
+                            resolution: 256
+                            z_channels: 8
+                        target: sgm.modules.diffusionmodules.model.Decoder
+                    encoder_config:
+                        params:
+                            attn_resolutions: []
+                            attn_type: vanilla-xformers
+                            ch: 128
+                            ch_mult:
+                                - 1
+                                - 2
+                                - 4
+                                - 4
+                            double_z: true
+                            dropout: 0
+                            in_channels: 1
+                            num_res_blocks: 2
+                            out_ch: 1
+                            resolution: 256
+                            z_channels: 8
+                        target: sgm.modules.diffusionmodules.model.Encoder
+                    input_key: xray
+                    loss_config:
+                        target: torch.nn.Identity
+                    monitor: val/loss/rec
+                    regularizer_config:
+                        target: sgm.modules.autoencoding.regularizers.DiagonalGaussianRegularizer
+                target: sgm.models.autoencoder.AutoencodingEngine
+            input_key: xray
+            loss_fn_config:
+                params:
+                    loss_weighting_config:
+                        target: sgm.modules.diffusionmodules.loss_weighting.EpsWeighting
+                    sigma_sampler_config:
+                        params:
+                            discretization_config:
+                                target: sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization
+                            num_idx: 1000
+                        target: sgm.modules.diffusionmodules.sigma_sampling.DiscreteSampling
+                target: sgm.modules.diffusionmodules.loss.StandardDiffusionLoss
+            network_config:
+                params:
+                    attention_resolutions:
+                        - 4
+                        - 2
+                        - 1
+                    channel_mult:
+                        - 1
+                        - 2
+                        - 4
+                        - 4
+                    in_channels: 8
+                    model_channels: 320
+                    num_head_channels: 64
+                    num_res_blocks: 2
+                    out_channels: 8
+                    spatial_transformer_attn_type: softmax-xformers
+                    transformer_depth: 1
+                    use_checkpoint: true
+                    use_linear_in_transformer: true
+                target: sgm.modules.diffusionmodules.openaimodel.UNetModel
+            sampler_config:
+                params:
+                    discretization_config:
+                        target: sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization
+                    guider_config:
+                        params:
+                            scale: 7.5
+                        target: sgm.modules.diffusionmodules.guiders.VanillaCFG
+                    num_steps: 50
+                target: sgm.modules.diffusionmodules.sampling.EulerEDMSampler
+            scale_factor: 0.13025
+            scheduler_config:
+                params:
+                    cycle_lengths:
+                        - 10000000000000
+                    f_max:
+                        - 1
+                    f_min:
+                        - 1
+                    f_start:
+                        - 1e-05
+                    warm_up_steps:
+                        - 10000
+                target: sgm.lr_scheduler.LambdaLinearScheduler
+        target: sgm.models.diffusion.DiffusionEngine

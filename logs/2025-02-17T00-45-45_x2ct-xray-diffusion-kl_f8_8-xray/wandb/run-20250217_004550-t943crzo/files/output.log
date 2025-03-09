@@ -1,0 +1,242 @@
+/raid/maximilian.schulze/miniconda3/envs/stablediffusion/lib/python3.10/site-packages/pytorch_lightning/loggers/wandb.py:395: UserWarning: There is a wandb run already in progress and newly created instances of `WandbLogger` will reuse this run. If this is not desired, call `wandb.finish()` before instantiating `WandbLogger`.
+  rank_zero_warn(
+Merged modelckpt-cfg:
+{'target': 'pytorch_lightning.callbacks.ModelCheckpoint', 'params': {'dirpath': 'logs/2025-02-17T00-45-45_x2ct-xray-diffusion-kl_f8_8-xray/checkpoints', 'filename': '{epoch:06}', 'verbose': True, 'save_last': True, 'every_n_train_steps': 5000}}
+strategy config:
+ ++++++++++++++
+ {'target': 'pytorch_lightning.strategies.DDPStrategy', 'params': {'find_unused_parameters': False}}
+ ++++++++++++++
+Caution: Saving checkpoints every n train steps without deleting. This might require some free space.
+Trainer opt: {'devices': '0,', 'benchmark': True, 'accumulate_grad_batches': 1, 'max_epochs': 1000, 'precision': 'bf16', 'accelerator': 'gpu'}
+Trainer kwargs: {'logger': <pytorch_lightning.loggers.wandb.WandbLogger object at 0x7f5cde41df30>, 'callbacks': [<main.SetupCallback object at 0x7f5abc1fd7b0>, <main.ImageLogger object at 0x7f5abc1fd6c0>, <pytorch_lightning.callbacks.lr_monitor.LearningRateMonitor object at 0x7f5abc1fd630>, <pytorch_lightning.callbacks.model_checkpoint.ModelCheckpoint object at 0x7f5abc1fd570>, <pytorch_lightning.callbacks.model_checkpoint.ModelCheckpoint object at 0x7f5abc1fdbd0>], 'plugins': []}
+/raid/maximilian.schulze/miniconda3/envs/stablediffusion/lib/python3.10/site-packages/lightning_fabric/connector.py:562: UserWarning: bf16 is supported for historical reasons but its usage is discouraged. Please set your precision to bf16-mixed instead!
+  rank_zero_warn(
+Using bfloat16 Automatic Mixed Precision (AMP)
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+IPU available: False, using: 0 IPUs
+HPU available: False, using: 0 HPUs
+#### Data #####
+datasets not yet initialized.
+accumulate_grad_batches = 1
+++++ NOT USING LR SCALING ++++
+Setting learning rate to 1.00e-05
+/raid/maximilian.schulze/miniconda3/envs/stablediffusion/lib/python3.10/site-packages/pytorch_lightning/trainer/configuration_validator.py:70: UserWarning: You passed in a `val_dataloader` but have no `validation_step`. Skipping val loop.
+  rank_zero_warn("You passed in a `val_dataloader` but have no `validation_step`. Skipping val loop.")
+You are using a CUDA device ('NVIDIA H100 80GB HBM3') that has Tensor Cores. To properly utilize them, you should set `torch.set_float32_matmul_precision('medium' | 'high')` which will trade-off precision for performance. For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
+Preparing datasets
+Dataset cache path: /raid/maximilian.schulze/dataset_cache/65520b12853ce7933c2bb43a56f6973c
+Dataset cache path: /raid/maximilian.schulze/dataset_cache/a42099c32de946c992c34b450f0890f6
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [6]
+Setting up LambdaLR scheduler...
+Project config
+model:
+  base_learning_rate: 1.0e-05
+  target: sgm.models.diffusion.DiffusionEngine
+  params:
+    scale_factor: 0.13025
+    disable_first_stage_autocast: true
+    input_key: xray
+    scheduler_config:
+      target: sgm.lr_scheduler.LambdaLinearScheduler
+      params:
+        warm_up_steps:
+        - 10000
+        cycle_lengths:
+        - 10000000000000
+        f_start:
+        - 1.0e-05
+        f_max:
+        - 1.0
+        f_min:
+        - 1.0
+    denoiser_config:
+      target: sgm.modules.diffusionmodules.denoiser.DiscreteDenoiser
+      params:
+        num_idx: 1000
+        scaling_config:
+          target: sgm.modules.diffusionmodules.denoiser_scaling.EpsScaling
+        discretization_config:
+          target: sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization
+    network_config:
+      target: sgm.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        use_checkpoint: true
+        in_channels: 8
+        out_channels: 8
+        model_channels: 320
+        attention_resolutions:
+        - 4
+        - 2
+        - 1
+        num_res_blocks: 2
+        channel_mult:
+        - 1
+        - 2
+        - 4
+        - 4
+        num_head_channels: 64
+        use_linear_in_transformer: true
+        transformer_depth: 1
+        spatial_transformer_attn_type: softmax-xformers
+    first_stage_config:
+      target: sgm.models.autoencoder.AutoencodingEngine
+      params:
+        input_key: xray
+        monitor: val/loss/rec
+        ckpt_engine: /raid/maximilian.schulze/generative-models/logs/2025-02-13T19-45-44_x2ct-xray-imagenet-kl_f8_8chn-xray/checkpoints/epoch=000968.ckpt
+        encoder_config:
+          target: sgm.modules.diffusionmodules.model.Encoder
+          params:
+            attn_type: vanilla-xformers
+            double_z: true
+            z_channels: 8
+            resolution: 256
+            in_channels: 1
+            out_ch: 1
+            ch: 128
+            ch_mult:
+            - 1
+            - 2
+            - 4
+            - 4
+            num_res_blocks: 2
+            attn_resolutions: []
+            dropout: 0.0
+        decoder_config:
+          target: sgm.modules.diffusionmodules.model.Decoder
+          params: ${model.params.first_stage_config.params.encoder_config.params}
+        regularizer_config:
+          target: sgm.modules.autoencoding.regularizers.DiagonalGaussianRegularizer
+        loss_config:
+          target: torch.nn.Identity
+    loss_fn_config:
+      target: sgm.modules.diffusionmodules.loss.StandardDiffusionLoss
+      params:
+        loss_weighting_config:
+          target: sgm.modules.diffusionmodules.loss_weighting.EpsWeighting
+        sigma_sampler_config:
+          target: sgm.modules.diffusionmodules.sigma_sampling.DiscreteSampling
+          params:
+            num_idx: 1000
+            discretization_config:
+              target: sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization
+    sampler_config:
+      target: sgm.modules.diffusionmodules.sampling.EulerEDMSampler
+      params:
+        num_steps: 50
+        discretization_config:
+          target: sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization
+        guider_config:
+          target: sgm.modules.diffusionmodules.guiders.VanillaCFG
+          params:
+            scale: 7.5
+data:
+  target: sgm.data.radchest.RadchestIndividualXrayDataloader
+  params:
+    num_projections: 2
+    train:
+      loader:
+        batch_size: 64
+        num_workers: 8
+      dataset:
+        target: sgm.data.radchest.CachedXCT_H5_dataset
+        params:
+          cache_dir: /raid/maximilian.schulze/dataset_cache
+          optimize_zip: false
+          h5_dataset_path: /raid/shared/x2ct/radchest/h5/sitk-dataset.h5
+          h5_ct_group_path: 512/ct
+          h5_xray_group_path: 512/drr
+          h5_text_dataset_path: /raid/shared/x2ct/radchest/discription-latents-h5/short-template.h5
+          h5_text_group_path: BiomedCLIPTextEmbedder/V2/OneNonNegativeTokens
+          split_file: /raid/shared/x2ct/radchest/train_val_split.json
+          train: true
+          scale: 256
+          scale_images: true
+          crop_size: 256
+          use_f16: false
+          ct_only: false
+          xray_only: true
+          load_text: true
+          num_projections: 2
+          is_preprocessed: false
+    validation:
+      loader:
+        batch_size: 64
+        num_workers: 8
+      dataset:
+        target: sgm.data.radchest.CachedXCT_H5_dataset
+        params:
+          cache_dir: /raid/maximilian.schulze/dataset_cache
+          optimize_zip: false
+          h5_dataset_path: /raid/shared/x2ct/radchest/h5/sitk-dataset.h5
+          h5_ct_group_path: 512/ct
+          h5_xray_group_path: 512/drr
+          h5_text_dataset_path: /raid/shared/x2ct/radchest/discription-latents-h5/short-template.h5
+          h5_text_group_path: BiomedCLIPTextEmbedder/V2/OneNonNegativeTokens
+          split_file: /raid/shared/x2ct/radchest/train_val_split.json
+          train: false
+          scale: 256
+          scale_images: true
+          crop_size: 256
+          use_f16: false
+          ct_only: false
+          xray_only: true
+          load_text: true
+          num_projections: 2
+          is_preprocessed: false
+
+Lightning config
+modelcheckpoint:
+  params:
+    every_n_train_steps: 5000
+callbacks:
+  metrics_over_trainsteps_checkpoint:
+    params:
+      every_n_train_steps: 10000
+  image_logger:
+    target: main.ImageLogger
+    params:
+      disabled: false
+      batch_frequency: 1000
+      max_images: 64
+      increase_log_steps: false
+      log_first_step: false
+      log_images_kwargs:
+        use_ema_scope: false
+        'N': 64
+        n_rows: 8
+trainer:
+  devices: 0,
+  benchmark: true
+  accumulate_grad_batches: 1
+  max_epochs: 1000
+  precision: bf16
+  accelerator: gpu
+
+  | Name              | Type                  | Params
+------------------------------------------------------------
+0 | model             | OpenAIWrapper         | 865 M
+1 | denoiser          | DiscreteDenoiser      | 0
+2 | conditioner       | GeneralConditioner    | 0
+3 | first_stage_model | AutoencodingEngine    | 83.7 M
+4 | loss_fn           | StandardDiffusionLoss | 0
+------------------------------------------------------------
+865 M     Trainable params
+83.7 M    Non-trainable params
+948 M     Total params
+3,795.440 Total estimated model params size (MB)
+
+Epoch 999: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 102/102 [01:18<00:00,  1.30it/s, v_num=crzo, loss=0.043, global_step=1.02e+5, lr_abs=1e-5]                                                                                    
+/raid/maximilian.schulze/miniconda3/envs/stablediffusion/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py:745: UserWarning: torch.utils.checkpoint: the use_reentrant parameter should be passed explicitly. In version 2.5 we will raise an exception if use_reentrant is not passed. use_reentrant=False is recommended, but if you need to preserve the current default behavior, you can pass use_reentrant=True. Refer to docs for more details on the differences between the two variants.
+  return fn(*args, **kwargs)
+/raid/maximilian.schulze/miniconda3/envs/stablediffusion/lib/python3.10/site-packages/pytorch_lightning/trainer/connectors/logger_connector/result.py:212: UserWarning: You called `self.log('global_step', ...)` in your `training_step` but the value needs to be floating point. Converting it to torch.float32.
+  warning_cache.warn(
+/raid/maximilian.schulze/miniconda3/envs/stablediffusion/lib/python3.10/site-packages/torch/utils/checkpoint.py:87: UserWarning: None of the inputs have requires_grad=True. Gradients will be None
+  warnings.warn(
+/raid/maximilian.schulze/miniconda3/envs/stablediffusion/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py:745: UserWarning: torch.utils.checkpoint: the use_reentrant parameter should be passed explicitly. In version 2.5 we will raise an exception if use_reentrant is not passed. use_reentrant=False is recommended, but if you need to preserve the current default behavior, you can pass use_reentrant=True. Refer to docs for more details on the differences between the two variants.
+  return fn(*args, **kwargs)
+/raid/maximilian.schulze/miniconda3/envs/stablediffusion/lib/python3.10/site-packages/torch/utils/checkpoint.py:87: UserWarning: None of the inputs have requires_grad=True. Gradients will be None
+  warnings.warn(
+`Trainer.fit` stopped: `max_epochs=1000` reached.
+Summoning checkpoint.

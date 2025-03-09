@@ -1,0 +1,38 @@
+{
+  "os":  "Linux-5.15.0-1042-nvidia-x86_64-with-glibc2.35",
+  "python":  "CPython 3.10.16",
+  "startedAt":  "2025-02-16T23:45:50.862186Z",
+  "args":  [
+    "--base",
+    "configs/x2ct/xray/diffusion-kl_f8_8-xray.yaml",
+    "--wandb",
+    "--projectname",
+    "xray-stablediffusion"
+  ],
+  "program":  "/raid/maximilian.schulze/generative-models/main.py",
+  "codePath":  "main.py",
+  "git":  {
+    "remote":  "git@github.com:max-3l/generative-models.git",
+    "commit":  "fd36c87c985d2e68efbb8fccee1a25bc9cffd7e0"
+  },
+  "email":  "maximilian.schulze@student.hpi.uni-potsdam.de",
+  "root":  "/raid/maximilian.schulze/generative-models/logs/2025-02-17T00-45-45_x2ct-xray-diffusion-kl_f8_8-xray",
+  "host":  "gx07",
+  "executable":  "/raid/maximilian.schulze/miniconda3/envs/stablediffusion/bin/python3",
+  "codePathLocal":  "main.py",
+  "cpu_count":  112,
+  "cpu_count_logical":  224,
+  "disk":  {
+    "/":  {
+      "total":  "1888425144320",
+      "used":  "1792548671488"
+    }
+  },
+  "memory":  {
+    "total":  "2164195594240"
+  },
+  "cpu":  {
+    "count":  112,
+    "countLogical":  224
+  }
+}

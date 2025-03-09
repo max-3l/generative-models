@@ -2,11 +2,14 @@ import math
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from einops import rearrange, repeat
 import pytorch_lightning as pl
 import torch
+import torch.nn.functional as F
 from omegaconf import ListConfig, OmegaConf
 from safetensors.torch import load_file as load_safetensors
 from torch.optim.lr_scheduler import LambdaLR
+import torchmetrics
 
 from ..modules import UNCONDITIONAL_CONFIG
 from ..modules.autoencoding.temporal_ae import VideoDecoder
@@ -14,6 +17,53 @@ from ..modules.diffusionmodules.wrappers import OPENAIUNETWRAPPER
 from ..modules.ema import LitEma
 from ..util import (default, disabled_train, get_obj_from_str,
                     instantiate_from_config, log_txt_as_img)
+
+
+
+# 3D SSIM Averaged over Depth, Height, and Width
+def compute_3d_psnr_ssim(ground_truth, reconstructed, data_range=(0, 1)):
+    """
+    Compute 3D SSIM between two 3D images (volumes) averaged over depth, height, and width.
+
+    Args:
+    - image1: A tensor or numpy array of shape (B, C, D, H, W).
+    - image2: A tensor or numpy array of shape (B, C, D, H, W).
+    - data_range: The dynamic range of the images (optional).
+
+    Re<turns:
+    - ssim_value: The average SSIM value across all axes.
+    """
+
+    assert ground_truth.shape == reconstructed.shape, "Input images must have the same shape"
+    assert len(ground_truth.shape) == 5, "Input images must have 5 dimensions (B, C, D, H, W)"
+
+    # Initialize a list to hold SSIM values
+    ssim_values = []
+    psnr_values = []
+
+    ssim = torchmetrics.image.StructuralSimilarityIndexMeasure(data_range=data_range, reduction="none").cuda()
+    # psnr = torchmetrics.image.PeakSignalNoiseRatio(data_range=data_range, reduction="none").cuda()
+    psnr = lambda x, y: 10 * torch.log10(1 / F.mse_loss(x, y, reduction='none').mean(dim=(1,2,3)))
+
+    # Compute SSIM along each of the three axes (depth, height, width)
+    for axis in range(3):
+        # Iterate along the current axis
+        for i in range(ground_truth.shape[2 + axis]):
+            if axis == 0:
+                slice_ssim = ssim(ground_truth[:, :, i, :, :], reconstructed[:, :, i, :, :])
+                slice_psnr = psnr(ground_truth[:, :, i, :, :], reconstructed[:, :, i, :, :])
+            elif axis == 1:
+                slice_ssim = ssim(ground_truth[:, :, :, i, :], reconstructed[:, :, :, i, :])
+                slice_psnr = psnr(ground_truth[:, :, :, i, :], reconstructed[:, :, :, i, :])
+            elif axis == 2:
+                slice_ssim = ssim(ground_truth[:, :, :, :, i], reconstructed[:, :, :, :, i])
+                slice_psnr = psnr(ground_truth[:, :, :, :, i], reconstructed[:, :, :, :, i])
+
+            ssim_values.append(slice_ssim)
+            psnr_values.append(slice_psnr)
+
+    # Return the average SSIM across all axes and slices
+    return torch.stack(psnr_values).mean(dim=0), torch.stack(ssim_values).mean(dim=0)
 
 
 class DiffusionEngine(pl.LightningModule):
@@ -38,17 +88,26 @@ class DiffusionEngine(pl.LightningModule):
         no_cond_log: bool = False,
         compile_model: bool = False,
         en_and_decode_n_samples_a_time: Optional[int] = None,
+        num_frames=None
     ):
         super().__init__()
+        if ckpt_path is not None:
+            print(f"Restoring diffusion from {ckpt_path}")
+        self.num_frames = num_frames
         self.log_keys = log_keys
         self.input_key = input_key
         self.optimizer_config = default(
             optimizer_config, {"target": "torch.optim.AdamW"}
         )
         model = instantiate_from_config(network_config)
-        self.model = get_obj_from_str(default(network_wrapper, OPENAIUNETWRAPPER))(
-            model, compile_model=compile_model
-        )
+        if num_frames is not None:
+            self.model = get_obj_from_str(network_wrapper)(
+                model, num_frames=num_frames, compile_model=compile_model
+            )
+        else:
+            self.model = get_obj_from_str(default(network_wrapper, OPENAIUNETWRAPPER))(
+                model, compile_model=compile_model
+            )
 
         self.denoiser = instantiate_from_config(denoiser_config)
         self.sampler = (
@@ -95,7 +154,7 @@ class DiffusionEngine(pl.LightningModule):
 
         missing, unexpected = self.load_state_dict(sd, strict=False)
         print(
-            f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys"
+            f"Restored diffusion module from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys"
         )
         if len(missing) > 0:
             print(f"Missing Keys: {missing}")
@@ -112,7 +171,7 @@ class DiffusionEngine(pl.LightningModule):
     def get_input(self, batch):
         # assuming unified data format, dataloader returns a dict.
         # image tensors should be scaled to -1 ... 1 and in bchw format
-        return batch[self.input_key]
+        return rearrange(batch[self.input_key], "b t c h w -> (b t) c h w")
 
     @torch.no_grad()
     def decode_first_stage(self, z):
@@ -161,6 +220,12 @@ class DiffusionEngine(pl.LightningModule):
         batch["global_step"] = self.global_step
         loss, loss_dict = self(x, batch)
         return loss, loss_dict
+    
+    def cache_step(self, batch: Dict) -> Tuple[torch.Tensor, Dict]:
+        x = self.get_input(batch)
+        x = self.encode_first_stage(x)
+        conditioning = self.conditioner.forward_for_cache(batch)
+        return x, conditioning
 
     def training_step(self, batch, batch_idx):
         loss, loss_dict = self.shared_step(batch)
@@ -257,14 +322,19 @@ class DiffusionEngine(pl.LightningModule):
         Defines heuristics to log different conditionings.
         These can be lists of strings (text-to-image), tensors, ints, ...
         """
-        image_h, image_w = batch[self.input_key].shape[2:]
+        image_h, image_w = batch[self.input_key].shape[3:]
         log = dict()
 
         for embedder in self.conditioner.embedders:
             if (
                 (self.log_keys is None) or (embedder.input_key in self.log_keys)
             ) and not self.no_cond_log:
-                x = batch[embedder.input_key][:n]
+                if embedder.input_key == "xrays":
+                    # xrays are a special case
+                    log[embedder.input_key] =  rearrange(batch[embedder.input_key], "b t c h w -> b c h (t w)")[:n]
+                    continue
+                else:
+                    x = batch[embedder.input_key][:n]
                 if isinstance(x, torch.Tensor):
                     if x.dim() == 1:
                         # class-conditional, convert integer to string
@@ -309,7 +379,13 @@ class DiffusionEngine(pl.LightningModule):
             ucg_keys = conditioner_input_keys
         log = dict()
 
-        x = self.get_input(batch)
+        x = batch[self.input_key]
+        N = min(x.shape[0], N)
+        x = x.to(self.device)[:N]
+        x = x.flatten(0, 1)
+
+        if "cond_aug" in batch:
+            batch["cond_aug"] = batch["cond_aug"][:N]
 
         c, uc = self.conditioner.get_unconditional_conditioning(
             batch,
@@ -320,22 +396,100 @@ class DiffusionEngine(pl.LightningModule):
 
         sampling_kwargs = {}
 
-        N = min(x.shape[0], N)
-        x = x.to(self.device)[:N]
-        log["inputs"] = x
+        sampling_kwargs["image_only_indicator"] = repeat(batch["image_only_indicator"][:N], "b ... -> (2 b) ...")
+
+        log["video_inputs"] = x.reshape(N, -1, *x.shape[1:])
         z = self.encode_first_stage(x)
-        log["reconstructions"] = self.decode_first_stage(z)
+        log["video_reconstructions"] = self.decode_first_stage(z.to(dtype=self.first_stage_model.decoder.conv_in.weight.dtype))
+        log["video_reconstructions"] = log["video_reconstructions"].reshape(N, -1, *log["video_reconstructions"].shape[1:])
+
         log.update(self.log_conditionings(batch, N))
 
         for k in c:
-            if isinstance(c[k], torch.Tensor):
+            if isinstance(c[k], torch.Tensor) and (k != "vector"):
                 c[k], uc[k] = map(lambda y: y[k][:N].to(self.device), (c, uc))
 
         if sample:
             with self.ema_scope("Plotting"):
                 samples = self.sample(
-                    c, shape=z.shape[1:], uc=uc, batch_size=N, **sampling_kwargs
+                    c, shape=z.shape[1:], uc=uc, batch_size=z.shape[0], **sampling_kwargs
                 )
-            samples = self.decode_first_stage(samples)
-            log["samples"] = samples
+            samples = self.decode_first_stage(samples.to(dtype=self.first_stage_model.decoder.conv_in.weight.dtype))
+            log["video_samples"] = samples.reshape(N, -1, *samples.shape[1:])
+
+        video_reconstructions = (log["video_reconstructions"].clamp(-1, 1) + 1) / 2
+        video_inputs = (log["video_inputs"].clamp(-1, 1) + 1) / 2
+        samples = (log["video_samples"].clamp(-1, 1) + 1) / 2
+        differences_input = torch.abs(samples - video_inputs)
+        differences_reconstruction = torch.abs(samples - video_reconstructions)
+
+        video_comparison = torch.cat([video_inputs, video_reconstructions, differences_reconstruction, differences_input], dim=-1)
+        w_per_img = video_comparison.shape[-1] // 4
+        h_per_img = 20
+        text = log_txt_as_img((w_per_img, h_per_img), ["Input", "Reconstruction", "Difference Reconstruction", "Difference Input"], size=8)
+        text = text.mean(dim=1)
+        text = rearrange(text, "b h w -> h (w b)")
+        text = repeat(text, "h w ->  b t c h w", b=N, t=video_comparison.shape[1], c=1)
+        video_comparison = torch.cat([text, video_comparison.cpu()], dim=-2)
+        video_comparison = rearrange(video_comparison, "b t c h w -> b (t c) h w")
+        log["video_comparison"] = video_comparison
+
         return log
+    
+    @torch.no_grad()
+    def batch_sample_metrics(
+        self,
+        batch: Dict,
+        ucg_keys: List[str] = None
+    ) -> Dict:
+        conditioner_input_keys = [e.input_key for e in self.conditioner.embedders]
+        if ucg_keys:
+            assert all(map(lambda x: x in conditioner_input_keys, ucg_keys)), (
+                "Each defined ucg key for sampling must be in the provided conditioner input keys,"
+                f"but we have {ucg_keys} vs. {conditioner_input_keys}"
+            )
+        else:
+            ucg_keys = conditioner_input_keys
+        log = dict()
+
+        
+
+        x = batch[self.input_key]
+        x = x.to(self.device)
+        N = x.shape[0]
+        x = x.flatten(0, 1)
+
+        if "cond_aug" in batch:
+            batch["cond_aug"] = batch["cond_aug"]
+
+        c, uc = self.conditioner.get_unconditional_conditioning(
+            batch,
+            force_uc_zero_embeddings=ucg_keys
+            if len(self.conditioner.embedders) > 0
+            else [],
+        )
+
+        sampling_kwargs = {}
+
+        sampling_kwargs["image_only_indicator"] = repeat(batch["image_only_indicator"], "b ... -> (2 b) ...")
+
+        video_inputs = x.reshape(N, -1, *x.shape[1:])
+        z = self.encode_first_stage(x)
+
+        for k in c:
+            if isinstance(c[k], torch.Tensor) and (k != "vector"):
+                c[k], uc[k] = map(lambda y: y[k].to(self.device), (c, uc))
+
+        with self.ema_scope("Plotting"):
+            samples = self.sample(
+                c, shape=z.shape[1:], uc=uc, batch_size=z.shape[0], **sampling_kwargs
+            )
+        samples = self.decode_first_stage(samples.to(dtype=self.first_stage_model.decoder.conv_in.weight.dtype))
+        video_samples = samples.reshape(N, -1, *samples.shape[1:])
+        video_samples = video_samples.clamp(-1, 1)
+        video_inputs = video_inputs.clamp(-1, 1)
+        video_samples = rearrange(video_samples, "b t c h w -> b c t h w")
+        video_inputs = rearrange(video_inputs, "b t c h w -> b c t h w")
+        psnr, ssim = compute_3d_psnr_ssim(video_inputs, video_samples, data_range=(-1, 1))
+        print(f"PSNR: {psnr.shape}, SSIM: {ssim.shape}")
+        return { "psnr": psnr, "ssim": ssim, "video_samples": video_samples, "video_inputs": video_inputs }

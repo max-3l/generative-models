@@ -13,4 +13,9 @@
 /build
 /src
 /.vscode
-/logs
+/logs/**/*.png
+/logs/**/*.mp4
+/logs/**/*.jpg
+/logs/**/*.ckpt
+/logs/**/*.wandb
+/cache

@@ -4,8 +4,7 @@ model:
   params:
     scale_factor: 0.13025
     disable_first_stage_autocast: True
-    log_keys:
-      - txt
+    input_key: xray
 
     scheduler_config:
       target: sgm.lr_scheduler.LambdaLinearScheduler
@@ -30,18 +29,16 @@ model:
       target: sgm.modules.diffusionmodules.openaimodel.UNetModel
       params:
         use_checkpoint: True
-        in_channels: 4
-        out_channels: 4
+        in_channels: 1
+        out_channels: 1
         model_channels: 320
-        attention_resolutions: [1, 2, 4]
+        attention_resolutions: [4, 2, 1]
         num_res_blocks: 2
         channel_mult: [1, 2, 4, 4]
         num_head_channels: 64
-        num_classes: sequential
-        adm_in_channels: 1792
-        num_heads: 1
+        use_linear_in_transformer: True
         transformer_depth: 1
-        context_dim: 768
+        context_dim: 1024
         spatial_transformer_attn_type: softmax-xformers
 
     conditioner_config:
@@ -73,16 +70,16 @@ model:
     first_stage_config:
       target: sgm.models.autoencoder.AutoencoderKL
       params:
-        ckpt_path: CKPT_PATH
+        ckpt_path: /raid/maximilian.schulze/generative-models/logs/2025-02-13T19-45-44_x2ct-xray-imagenet-kl_f8_8chn-xray/checkpoints/epoch=000968.ckpt
         embed_dim: 4
         monitor: val/rec_loss
         ddconfig:
           attn_type: vanilla-xformers
           double_z: true
-          z_channels: 4
+          z_channels: 8
           resolution: 256
-          in_channels: 3
-          out_ch: 3
+          in_channels: 1
+          out_ch: 1
           ch: 128
           ch_mult: [1, 2, 4, 4]
           num_res_blocks: 2

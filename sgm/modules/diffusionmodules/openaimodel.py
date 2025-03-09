@@ -869,7 +869,7 @@ class UNetModel(nn.Module):
         emb = self.time_embed(t_emb)
 
         if self.num_classes is not None:
-            assert y.shape[0] == x.shape[0]
+            assert y.shape[0] == x.shape[0], f"y and x must have the same batch size. y: {y.shape}, x: {x.shape}"
             emb = emb + self.label_emb(y)
 
         h = x

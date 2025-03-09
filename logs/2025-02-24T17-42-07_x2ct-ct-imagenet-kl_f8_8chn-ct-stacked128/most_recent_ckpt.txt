@@ -1,0 +1,1 @@
+/raid/maximilian.schulze/generative-models/logs/2025-02-24T17-42-07_x2ct-ct-imagenet-kl_f8_8chn-ct-stacked128/checkpoints/last-v1.ckpt

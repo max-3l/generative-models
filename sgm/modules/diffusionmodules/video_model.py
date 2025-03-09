@@ -1,7 +1,9 @@
 from functools import partial
 from typing import List, Optional, Union
 
-from einops import rearrange
+from einops import rearrange, repeat
+
+from sgm.modules.diffusionmodules.guiders import LinearPredictionGuider, TrianglePredictionGuider, VanillaCFG
 
 from ...modules.diffusionmodules.openaimodel import *
 from ...modules.video_attention import SpatialVideoTransformer
@@ -454,20 +456,36 @@ class VideoUNet(nn.Module):
         num_video_frames: Optional[int] = None,
         image_only_indicator: Optional[th.Tensor] = None,
     ):
-        assert (y is not None) == (
-            self.num_classes is not None
-        ), "must specify y if and only if the model is class-conditional -> no, relax this TODO"
-        hs = []
-        t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
-        emb = self.time_embed(t_emb)
+        num_video_frames = image_only_indicator.shape[1] if exists(image_only_indicator) else num_video_frames
+        # image_only_indicator = repeat(image_only_indicator, "b ...-> (2 b) ...")
+        with th.autocast(device_type="cuda", dtype=self.time_embed[0].weight.dtype):
+            x = x.to(self.time_embed[0].weight.dtype)
+            y = y.to(self.time_embed[0].weight.dtype) if exists(y) else None
 
-        if self.num_classes is not None:
-            assert y.shape[0] == x.shape[0]
-            emb = emb + self.label_emb(y)
+            assert (y is not None) == (
+                self.num_classes is not None
+            ), "must specify y if and only if the model is class-conditional -> no, relax this TODO"
+            hs = []
+            t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)\
+                .to(self.time_embed[0].weight.dtype)
+            emb = self.time_embed(t_emb)
 
-        h = x
-        for module in self.input_blocks:
-            h = module(
+            if self.num_classes is not None:
+                assert y.shape[0] == x.shape[0], f"y and x must have the same batch size. y: {y.shape}, x: {x.shape}"
+                emb = emb + self.label_emb(y)
+
+            h = x
+            for module in self.input_blocks:
+                h = module(
+                    h,
+                    emb,
+                    context=context,
+                    image_only_indicator=image_only_indicator,
+                    time_context=time_context,
+                    num_video_frames=num_video_frames,
+                )
+                hs.append(h)
+            h = self.middle_block(
                 h,
                 emb,
                 context=context,
@@ -475,27 +493,19 @@ class VideoUNet(nn.Module):
                 time_context=time_context,
                 num_video_frames=num_video_frames,
             )
-            hs.append(h)
-        h = self.middle_block(
-            h,
-            emb,
-            context=context,
-            image_only_indicator=image_only_indicator,
-            time_context=time_context,
-            num_video_frames=num_video_frames,
-        )
-        for module in self.output_blocks:
-            h = th.cat([h, hs.pop()], dim=1)
-            h = module(
-                h,
-                emb,
-                context=context,
-                image_only_indicator=image_only_indicator,
-                time_context=time_context,
-                num_video_frames=num_video_frames,
-            )
-        h = h.type(x.dtype)
-        return self.out(h)
+            for module in self.output_blocks:
+                h = th.cat([h, hs.pop()], dim=1)
+                h = module(
+                    h,
+                    emb,
+                    context=context,
+                    image_only_indicator=image_only_indicator,
+                    time_context=time_context,
+                    num_video_frames=num_video_frames,
+                )
+            h = h.type(x.dtype)
+            out = self.out(h)
+            return out
 
 
 class PostHocAttentionBlockWithTimeMixing(AttentionBlock):

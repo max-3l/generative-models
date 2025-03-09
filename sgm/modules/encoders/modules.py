@@ -9,7 +9,7 @@ import open_clip
 import torch
 import torch.nn as nn
 from einops import rearrange, repeat
-from omegaconf import ListConfig
+from omegaconf import DictConfig, ListConfig
 from torch.utils.checkpoint import checkpoint
 from transformers import (ByT5Tokenizer, CLIPTextModel, CLIPTokenizer,
                           T5EncoderModel, T5Tokenizer)
@@ -69,8 +69,8 @@ class AbstractEmbModel(nn.Module):
 
 
 class GeneralConditioner(nn.Module):
-    OUTPUT_DIM2KEYS = {2: "vector", 3: "crossattn", 4: "concat"} # , 5: "concat"}
-    KEY2CATDIM = {"vector": 1, "crossattn": 2, "concat": 1, "cond_view": 1, "cond_motion": 1}
+    OUTPUT_DIM2KEYS = {2: "vector", 3: "crossattn", 4: "concat", 5: "concat"}
+    KEY2CATDIM = {"vector": 1, "crossattn": 1, "concat": 1, "cond_view": 1, "cond_motion": 1}
 
     def __init__(self, emb_models: Union[List, ListConfig]):
         super().__init__()
@@ -123,15 +123,22 @@ class GeneralConditioner(nn.Module):
         output = dict()
         if force_zero_embeddings is None:
             force_zero_embeddings = []
-        for embedder in self.embedders:
-            embedding_context = nullcontext if embedder.is_trainable else torch.no_grad
-            with embedding_context():
-                if hasattr(embedder, "input_key") and (embedder.input_key is not None):
-                    if embedder.legacy_ucg_val is not None:
-                        batch = self.possibly_get_ucg_val(embedder, batch)
-                    emb_out = embedder(batch[embedder.input_key])
-                elif hasattr(embedder, "input_keys"):
-                    emb_out = embedder(*[batch[k] for k in embedder.input_keys])
+        for embedder_index, embedder in enumerate(self.embedders):
+            embedder_cache_name = embedder.cache_name if hasattr(embedder, "cache_name") else embedder.__class__.__name__ + "-InpKey-" + (embedder.input_key if hasattr(embedder, "input_key") else repr(embedder.input_keys)) + "-EmbInd-" + str(embedder_index)
+            # print(f"Embedder cache name: {embedder_cache_name}", "keys", list(batch.keys()))
+            if embedder_cache_name in batch.keys():
+                emb_out = batch[embedder_cache_name]
+                if embedder.legacy_ucg_val is not None:
+                    raise RuntimeError()
+            else:
+                embedding_context = nullcontext if embedder.is_trainable else torch.no_grad
+                with embedding_context():
+                    if hasattr(embedder, "input_key") and (embedder.input_key is not None):
+                        if embedder.legacy_ucg_val is not None:
+                            batch = self.possibly_get_ucg_val(embedder, batch)
+                        emb_out = embedder(batch[embedder.input_key])
+                    elif hasattr(embedder, "input_keys"):
+                        emb_out = embedder(*[batch[k] for k in embedder.input_keys])
             assert isinstance(
                 emb_out, (torch.Tensor, list, tuple)
             ), f"encoder outputs must be tensors or a sequence, but got {type(emb_out)}"
@@ -160,11 +167,36 @@ class GeneralConditioner(nn.Module):
                 ):
                     emb = torch.zeros_like(emb)
                 if out_key in output:
+                    print(f"Concatenating {out_key} ({output[out_key].shape}) with shape {emb.shape}")
                     output[out_key] = torch.cat(
                         (output[out_key], emb), self.KEY2CATDIM[out_key]
                     )
                 else:
                     output[out_key] = emb
+        return output
+
+    def forward_for_cache(self, batch: Dict):
+        output = dict()
+        for embedder_index, embedder in enumerate(self.embedders):
+            embedding_context = nullcontext if embedder.is_trainable else torch.no_grad
+            with embedding_context():
+                if hasattr(embedder, "input_key") and (embedder.input_key is not None):
+                    emb_out = embedder(batch[embedder.input_key])
+                elif hasattr(embedder, "input_keys"):
+                    emb_out = embedder(*[batch[k] for k in embedder.input_keys])
+            assert isinstance(
+                emb_out, (torch.Tensor, list, tuple)
+            ), f"encoder outputs must be tensors or a sequence, but got {type(emb_out)}"
+            if isinstance(emb_out, (list, tuple)):
+                raise NotImplementedError()
+            # if not isinstance(emb_out, (list, tuple)):
+            #     emb_out = [emb_out]
+            embedder_cache_name = embedder.cache_name if hasattr(embedder, "cache_name") else embedder.__class__.__name__ + "-InpKey-" + (embedder.input_key if hasattr(embedder, "input_key") else repr(embedder.input_keys)) + "-EmbInd-" + str(embedder_index)
+            for emb in emb_out:
+                if embedder_cache_name in output:
+                    output[embedder_cache_name].append(emb)
+                else:
+                    output[embedder_cache_name] = [emb]
         return output
 
     def get_unconditional_conditioning(
@@ -569,7 +601,211 @@ class FrozenOpenCLIPEmbedder(AbstractEmbModel):
 
     def encode(self, text):
         return self(text)
+    
+class FrozenOpenCLIPEmbedderMedical(AbstractEmbModel):
+    LAYERS = [
+        # "pooled",
+        "last",
+        "penultimate",
+    ]
 
+    def __init__(
+        self,
+        device="cuda",
+        max_length=77,
+        freeze=True,
+        layer="last",
+    ):
+        super().__init__()
+        assert layer in self.LAYERS
+        name = 'hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224'
+        model, _, _ = open_clip.create_model_and_transforms(
+            name,
+            cache_dir="/raid/shared/x2ct/hf_cache",
+            device=torch.device("cpu")
+        )
+        del model.visual
+        self.model = model.text
+        self.model.output_tokens = True
+        self.tokenizer = open_clip.get_tokenizer(name)
+        # self.model.return_dict = True
+        # self.model.transformer.output_hidden_states = True
+
+        self.device = device
+        self.max_length = max_length
+        if freeze:
+            self.freeze()
+        self.layer = layer
+        if self.layer == "last":
+            self.layer_idx = 0
+        elif self.layer == "penultimate":
+            self.layer_idx = 1
+        else:
+            raise NotImplementedError()
+        
+        assert self.layer == "last", "Only last layer is supported for now"
+
+    def freeze(self):
+        self.model = self.model.eval()
+        for param in self.parameters():
+            param.requires_grad = False
+    
+    @torch.no_grad()
+    def forward(self, text):
+        tokens = self.tokenizer(text).to(self.device)
+        projected, tokens = self.model.forward(tokens)
+        return tokens
+        # return out.hidden_states[-1 - self.layer_idx]
+
+    def text_transformer_forward(self, x: torch.Tensor, attn_mask=None):
+        for i, r in enumerate(self.model.transformer.resblocks):
+            if i == len(self.model.transformer.resblocks) - self.layer_idx:
+                break
+            if (
+                self.model.transformer.grad_checkpointing
+                and not torch.jit.is_scripting()
+            ):
+                x = checkpoint(r, x, attn_mask)
+            else:
+                x = r(x, attn_mask=attn_mask)
+        return x
+
+    def encode(self, text):
+        return self(text)
+
+
+import torchvision.transforms as T
+
+class ToRGB(torch.nn.Module):
+    def forward(self, x: torch.Tensor):
+        return x.expand(-1, 3, -1, -1)
+
+class FrozenOpenCLIPImageEmbedderMedical(AbstractEmbModel):
+    def __init__(self):
+        super().__init__()
+        model, _, _ = open_clip.create_model_and_transforms('hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224', cache_dir="/raid/shared/x2ct/hf_cache")
+        self.model = model
+        self.visual_preprocessor = torch.nn.Sequential(
+            T.Resize(size=224, interpolation=T.InterpolationMode.BICUBIC, max_size=None, antialias='warn'),
+            # T.Pad(padding=48, fill=0, padding_mode='constant'),
+            T.CenterCrop(size=(224, 224)),
+            # Grayscale tensor to rgb
+            ToRGB(),
+            T.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711)),
+        )
+        self.model.eval()
+        # del self.model.transformer
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+        for param in self.parameters():
+            param.requires_grad = False
+
+        self.ucg_rate = 0.0
+        self.unsqueeze_dim = False
+        self.stored_batch = None
+        self.model.visual.output_tokens = False
+        self.output_tokens = False
+
+        self.max_crops = 0
+        self.pad_to_max_len = self.max_crops > 0
+        self.repeat_to_max_len = False and (not self.pad_to_max_len)
+        self.device = "cuda"
+        self.max_length = 77
+        self.model.to(self.device)
+    
+    def preprocess(self, x):
+        x = (x + 1.0) / 2.0
+        x = self.visual_preprocessor(x)
+        return x
+
+    @autocast
+    def forward(self, image, no_dropout=False):
+        z = self.encode_with_vision_transformer(image)
+        tokens = None
+        if self.output_tokens:
+            z, tokens = z[0], z[1]
+        z = z.to(image.dtype)
+        if self.ucg_rate > 0.0 and not no_dropout and not (self.max_crops > 0):
+            z = (
+                torch.bernoulli(
+                    (1.0 - self.ucg_rate) * torch.ones(z.shape[0], device=z.device)
+                )[:, None]
+                * z
+            )
+            if tokens is not None:
+                tokens = (
+                    expand_dims_like(
+                        torch.bernoulli(
+                            (1.0 - self.ucg_rate)
+                            * torch.ones(tokens.shape[0], device=tokens.device)
+                        ),
+                        tokens,
+                    )
+                    * tokens
+                )
+        if self.unsqueeze_dim:
+            z = z[:, None, :]
+        if self.output_tokens:
+            assert not self.repeat_to_max_len
+            assert not self.pad_to_max_len
+            return tokens, z
+        if self.repeat_to_max_len:
+            if z.dim() == 2:
+                z_ = z[:, None, :]
+            else:
+                z_ = z
+            return repeat(z_, "b 1 d -> b n d", n=self.max_length), z
+        elif self.pad_to_max_len:
+            assert z.dim() == 3
+            z_pad = torch.cat(
+                (
+                    z,
+                    torch.zeros(
+                        z.shape[0],
+                        self.max_length - z.shape[1],
+                        z.shape[2],
+                        device=z.device,
+                    ),
+                ),
+                1,
+            )
+            return z_pad, z_pad[:, 0, ...]
+        return z
+    
+    def encode_with_vision_transformer(self, img):
+        # if self.max_crops > 0:
+        #    img = self.preprocess_by_cropping(img)
+        if img.dim() == 5:
+            assert self.max_crops == img.shape[1]
+            img = rearrange(img, "b n c h w -> (b n) c h w")
+        img = self.preprocess(img)
+        if not self.output_tokens:
+            assert not self.model.visual.output_tokens
+            x = self.model.visual(img)
+            tokens = None
+        else:
+            assert self.model.visual.output_tokens
+            x, tokens = self.model.visual(img)
+        if self.max_crops > 0:
+            x = rearrange(x, "(b n) d -> b n d", n=self.max_crops)
+            # drop out between 0 and all along the sequence axis
+            x = (
+                torch.bernoulli(
+                    (1.0 - self.ucg_rate)
+                    * torch.ones(x.shape[0], x.shape[1], 1, device=x.device)
+                )
+                * x
+            )
+            if tokens is not None:
+                tokens = rearrange(tokens, "(b n) t d -> b t (n d)", n=self.max_crops)
+                print(
+                    f"You are running very experimental token-concat in {self.__class__.__name__}. "
+                    f"Check what you are doing, and then remove this message."
+                )
+        if self.output_tokens:
+            return x, tokens
+        return x
 
 class FrozenOpenCLIPImageEmbedder(AbstractEmbModel):
     """
@@ -931,6 +1167,25 @@ class ConcatTimestepEmbedderND(AbstractEmbModel):
         emb = self.timestep(x)
         emb = rearrange(emb, "(b d) d2 -> b (d d2)", b=b, d=dims, d2=self.outdim)
         return emb
+    
+class ConcatTimestepEmbedderNDCT(AbstractEmbModel):
+    """embeds each dimension independently and concatenates them"""
+
+    def __init__(self, outdim):
+        super().__init__()
+        self.timestep = Timestep(outdim)
+        self.outdim = outdim
+
+    def forward(self, x):
+        x = x.flatten(0, 1)
+        if x.ndim == 1:
+            x = x[:, None]
+        assert len(x.shape) == 2
+        b, dims = x.shape[0], x.shape[1]
+        x = rearrange(x, "b d -> (b d)")
+        emb = self.timestep(x)
+        emb = rearrange(emb, "(b d) d2 -> b (d d2)", b=b, d=dims, d2=self.outdim)
+        return emb
 
 
 class GaussianEncoder(Encoder, AbstractEmbModel):
@@ -993,6 +1248,176 @@ class VideoPredictionEmbedderWithEncoder(AbstractEmbModel):
         Tuple[torch.Tensor, dict],
         Tuple[Tuple[torch.Tensor, torch.Tensor], dict],
     ]:
+        vid = vid.flatten(0, 1)
+        if self.sigma_sampler is not None:
+            b = vid.shape[0] // self.n_cond_frames
+            sigmas = self.sigma_sampler(b).to(vid.device)
+            if self.sigma_cond is not None:
+                sigma_cond = self.sigma_cond(sigmas)
+                # sigma_cond = repeat(sigma_cond, "b d -> (b t) d", t=self.n_copies)
+                if self.n_cond_frames == 1:
+                    sigma_cond = repeat(sigma_cond, "b d -> (b t) d", t=self.n_copies)
+                else:
+                    sigma_cond = repeat(sigma_cond, "b d -> (b t) d", t=self.n_cond_frames) # For SV4D
+            sigmas = repeat(sigmas, "b -> (b t)", t=self.n_cond_frames)
+            noise = torch.randn_like(vid)
+            vid = vid + noise * append_dims(sigmas, vid.ndim)
+
+        with torch.autocast("cuda", enabled=not self.disable_encoder_autocast):
+            n_samples = (
+                self.en_and_decode_n_samples_a_time
+                if self.en_and_decode_n_samples_a_time is not None
+                else vid.shape[0]
+            )
+            n_rounds = math.ceil(vid.shape[0] / n_samples)
+            all_out = []
+            for n in range(n_rounds):
+                if self.is_ae:
+                    out = self.encoder.encode(vid[n * n_samples : (n + 1) * n_samples])
+                else:
+                    out = self.encoder(vid[n * n_samples : (n + 1) * n_samples])
+                all_out.append(out)
+
+        vid = torch.cat(all_out, dim=0)
+        vid *= self.scale_factor
+
+        vid = rearrange(vid, "(b t) c h w -> b () (t c) h w", t=self.n_cond_frames)
+        vid = repeat(vid, "b 1 c h w -> (b t) c h w", t=self.n_copies)
+
+        return_val = (vid, sigma_cond) if self.sigma_cond is not None else vid
+
+        return return_val
+
+class VideoPredictionEmbedderWithEncoderVideoOld(AbstractEmbModel):
+    def __init__(
+        self,
+        n_cond_frames: int,
+        n_copies: int,
+        encoder_config: dict,
+        sigma_sampler_config: Optional[dict] = None,
+        sigma_cond_config: Optional[dict] = None,
+        is_ae: bool = False,
+        scale_factor: float = 1.0,
+        disable_encoder_autocast: bool = False,
+        en_and_decode_n_samples_a_time: Optional[int] = None,
+    ):
+        super().__init__()
+
+        self.n_cond_frames = n_cond_frames
+        self.n_copies = n_copies
+        self.encoder = instantiate_from_config(encoder_config)
+        self.sigma_sampler = (
+            instantiate_from_config(sigma_sampler_config)
+            if sigma_sampler_config is not None
+            else None
+        )
+        self.sigma_cond = (
+            instantiate_from_config(sigma_cond_config)
+            if sigma_cond_config is not None
+            else None
+        )
+        self.is_ae = is_ae
+        self.scale_factor = scale_factor
+        self.disable_encoder_autocast = disable_encoder_autocast
+        self.en_and_decode_n_samples_a_time = en_and_decode_n_samples_a_time
+
+    def forward(
+        self, vid: torch.Tensor
+    ) -> Union[
+        torch.Tensor,
+        Tuple[torch.Tensor, torch.Tensor],
+        Tuple[torch.Tensor, dict],
+        Tuple[Tuple[torch.Tensor, torch.Tensor], dict],
+    ]:
+        flattend = False
+        if vid.shape[2] == 1:
+            number_samples = vid.shape[1]
+            vid = vid.flatten(0, 1)
+            flattend = True
+        if self.sigma_sampler is not None:
+            b = vid.shape[0] // self.n_cond_frames
+            sigmas = self.sigma_sampler(b).to(vid.device)
+            if self.sigma_cond is not None:
+                sigma_cond = self.sigma_cond(sigmas)
+                if self.n_cond_frames == 1:
+                    sigma_cond = repeat(sigma_cond, "b d -> (b t) d", t=self.n_copies)
+                else:
+                    sigma_cond = repeat(sigma_cond, "b d -> (b t) d", t=self.n_cond_frames) # For SV4D
+            sigmas = repeat(sigmas, "b -> (b t)", t=self.n_cond_frames)
+            noise = torch.randn_like(vid)
+            vid = vid + noise * append_dims(sigmas, vid.ndim)
+
+        with torch.autocast("cuda", enabled=not self.disable_encoder_autocast):
+            n_samples = (
+                self.en_and_decode_n_samples_a_time
+                if self.en_and_decode_n_samples_a_time is not None
+                else vid.shape[0]
+            )
+            n_rounds = math.ceil(vid.shape[0] / n_samples)
+            all_out = []
+            for n in range(n_rounds):
+                if self.is_ae:
+                    out = self.encoder.encode(vid[n * n_samples : (n + 1) * n_samples])
+                else:
+                    out = self.encoder(vid[n * n_samples : (n + 1) * n_samples])
+                all_out.append(out)
+
+        vid = torch.cat(all_out, dim=0)
+        vid *= self.scale_factor
+
+        if self.n_cond_frames == 1:
+            vid = rearrange(vid, "(b t) c h w -> b () (t c) h w", t=self.n_cond_frames)
+            vid = repeat(vid, "b 1 c h w -> (b t) c h w", t=self.n_copies)
+
+        return_val = (vid, sigma_cond) if self.sigma_cond is not None else vid
+        if flattend:
+            return_val = rearrange(return_val, "(b t) c h w -> b t c h w", t=number_samples)
+        return return_val
+
+
+class VideoPredictionEmbedderWithEncoderOriginal(AbstractEmbModel):
+    def __init__(
+        self,
+        n_cond_frames: int,
+        n_copies: int,
+        encoder_config: dict,
+        sigma_sampler_config: Optional[dict] = None,
+        sigma_cond_config: Optional[dict] = None,
+        is_ae: bool = False,
+        scale_factor: float = 1.0,
+        disable_encoder_autocast: bool = False,
+        en_and_decode_n_samples_a_time: Optional[int] = None,
+    ):
+        super().__init__()
+
+        self.n_cond_frames = n_cond_frames
+        self.n_copies = n_copies
+        self.encoder = instantiate_from_config(encoder_config)
+        self.sigma_sampler = (
+            instantiate_from_config(sigma_sampler_config)
+            if sigma_sampler_config is not None
+            else None
+        )
+        self.sigma_cond = (
+            instantiate_from_config(sigma_cond_config)
+            if sigma_cond_config is not None
+            else None
+        )
+        self.is_ae = is_ae
+        self.scale_factor = scale_factor
+        self.disable_encoder_autocast = disable_encoder_autocast
+        self.en_and_decode_n_samples_a_time = en_and_decode_n_samples_a_time
+
+    def forward(
+        self, vid: torch.Tensor
+    ) -> Union[
+        torch.Tensor,
+        Tuple[torch.Tensor, torch.Tensor],
+        Tuple[torch.Tensor, dict],
+        Tuple[Tuple[torch.Tensor, torch.Tensor], dict],
+    ]:
+        if len(vid.shape) == 5:
+            vid = rearrange(vid, "b t c h w -> (b t) c h w")
         if self.sigma_sampler is not None:
             b = vid.shape[0] // self.n_cond_frames
             sigmas = self.sigma_sampler(b).to(vid.device)
@@ -1032,6 +1457,25 @@ class VideoPredictionEmbedderWithEncoder(AbstractEmbModel):
 
         return return_val
 
+class FrozenOpenCLIPImagePredictionEmbedderXrays(AbstractEmbModel):
+    def __init__(
+        self,
+        open_clip_embedding_config: Dict,
+        n_copies: int = 1,
+    ):
+        super().__init__()
+        self.open_clip = instantiate_from_config(open_clip_embedding_config)
+        self.n_copies = n_copies
+
+    def forward(self, vid):
+        n_cond_frames = vid.shape[1]
+        vid = rearrange(vid, "b t c h w -> (b t) c h w")
+        vid = self.open_clip(vid)
+        # print(vid.shape)
+        # import pdb; pdb.set_trace()
+        vid = rearrange(vid, "(b t) d -> b t d", t=n_cond_frames)
+        vid = repeat(vid, "b t d -> (b s) t d", s=self.n_copies)
+        return vid
 
 class FrozenOpenCLIPImagePredictionEmbedder(AbstractEmbModel):
     def __init__(
@@ -1052,3 +1496,15 @@ class FrozenOpenCLIPImagePredictionEmbedder(AbstractEmbModel):
         vid = repeat(vid, "b t d -> (b s) t d", s=self.n_copies)
 
         return vid
+
+class TrainableConditioningProjection(AbstractEmbModel):
+    def __init__(self, input_dim: int, output_dim: int, model: DictConfig, freeze_model: True):
+        super().__init__()
+        self.proj = nn.Linear(input_dim, output_dim)
+        self.model = instantiate_from_config(model)
+        if freeze_model:
+            for param in self.model.parameters():
+                param.requires_grad = False
+
+    def forward(self, x):
+        return self.proj(self.model(x))
