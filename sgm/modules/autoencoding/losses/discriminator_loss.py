@@ -140,8 +140,8 @@ class GeneralLPIPSWithDiscriminator(nn.Module):
         # blend logits and images together
 
         # prepare logits for plotting
-        logits_real = to_colormap(logits_real)
-        logits_fake = to_colormap(logits_fake)
+        logits_real = to_colormap(logits_real.float())
+        logits_fake = to_colormap(logits_fake.float())
         # resize logits
         # -> (b, 3, h, w)
 

@@ -228,6 +228,7 @@ class AutoencodingEngine(AbstractAutoencoder):
         self, x: torch.Tensor, **additional_decode_kwargs
     ) -> Tuple[torch.Tensor, torch.Tensor, dict]:
         z, reg_log = self.encode(x, return_reg_log=True)
+        z = z.to(dtype=x.dtype)
         dec = self.decode(z, **additional_decode_kwargs)
         return z, dec, reg_log
 

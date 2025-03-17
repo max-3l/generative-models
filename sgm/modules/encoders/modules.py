@@ -621,7 +621,7 @@ class FrozenOpenCLIPEmbedderMedical(AbstractEmbModel):
         name = 'hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224'
         model, _, _ = open_clip.create_model_and_transforms(
             name,
-            cache_dir="/raid/shared/x2ct/hf_cache",
+            # cache_dir="/raid/shared/x2ct/hf_cache",
             device=torch.device("cpu")
         )
         del model.visual
@@ -683,7 +683,7 @@ class ToRGB(torch.nn.Module):
 class FrozenOpenCLIPImageEmbedderMedical(AbstractEmbModel):
     def __init__(self):
         super().__init__()
-        model, _, _ = open_clip.create_model_and_transforms('hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224', cache_dir="/raid/shared/x2ct/hf_cache")
+        model, _, _ = open_clip.create_model_and_transforms('hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224')#, cache_dir="/raid/shared/x2ct/hf_cache")
         self.model = model
         self.visual_preprocessor = torch.nn.Sequential(
             T.Resize(size=224, interpolation=T.InterpolationMode.BICUBIC, max_size=None, antialias='warn'),
