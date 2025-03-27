@@ -1,0 +1,120 @@
+model:
+  base_learning_rate: 1e-6
+  target: sgm.models.autoencoder.AutoencodingEngine
+  params:
+    input_key: ct_slice
+    monitor: train/loss/rec
+    disc_start_iter: 0
+
+    encoder_config:
+      target: sgm.modules.diffusionmodules.model.Encoder
+      params:
+        attn_type: vanilla-xformers
+        double_z: true
+        z_channels: 8
+        resolution: 128
+        in_channels: 1
+        out_ch: 1
+        ch: 128
+        ch_mult: [1, 2, 4, 4]
+        num_res_blocks: 2
+        attn_resolutions: []
+        dropout: 0.0
+
+    decoder_config:
+      target: sgm.modules.diffusionmodules.model.Decoder
+      params: ${model.params.encoder_config.params}
+
+    regularizer_config:
+      target: sgm.modules.autoencoding.regularizers.DiagonalGaussianRegularizer
+
+    loss_config:
+      target: sgm.modules.autoencoding.losses.GeneralLPIPSWithDiscriminator
+      params:
+        perceptual_weight: 0.25
+        disc_start: 20001
+        disc_weight: 0.5
+        learn_logvar: True
+        disc_in_channels: 1
+
+        regularization_weights:
+          kl_loss: 1.0
+
+data:
+  target: sgm.data.ct_rate.CTIndividualSliceSingleCTDataloader
+  params:
+    train:
+      loader:
+        batch_size: 64
+        num_workers: 5
+      dataset:
+        target: sgm.data.ct_rate.IndividualCtSliceDataset
+        params:
+          batch_size: ${data.params.train.loader.batch_size}
+          shuffle: True
+          distribution: "normal"
+          sample_dim_size: 128
+          prefetch_factor: 1
+          num_workers: 5
+          dataset:
+            target: x2ct_datasets.ct_rate.dataset.CTRATEDatasetWithText
+            params:
+              split: train
+              load_ct: true
+              load_xray: false
+              downsample_size: 128
+              output_dtype: float32
+    validation:
+      loader:
+          batch_size: 64
+          num_workers: 5
+      dataset:
+        target: sgm.data.ct_rate.IndividualCtSliceDataset
+        params:
+          batch_size: ${data.params.validation.loader.batch_size}
+          shuffle: True
+          distribution: "normal"
+          sample_dim_size: 128
+          prefetch_factor: 1
+          num_workers: 5
+          dataset:
+            target: x2ct_datasets.ct_rate.dataset.CTRATEDatasetWithText
+            params:
+              split: val
+              load_ct: true
+              load_xray: false
+              downsample_size: 128
+              output_dtype: float32
+
+lightning:
+  strategy:
+    target: pytorch_lightning.strategies.DDPStrategy
+    params:
+      find_unused_parameters: True
+
+  callbacks:
+    metrics_over_trainsteps_checkpoint:
+      params:
+        every_n_train_steps: 6000
+        every_n_epochs:
+        save_top_k: 5
+        monitor: train/loss/rec 
+
+    image_logger:
+      target: main.ImageLogger
+      params:
+        enable_autocast: False
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    devices: 0,
+    limit_val_batches: 100
+    benchmark: True
+    accumulate_grad_batches: 1
+    val_check_interval: 6000
+    max_epochs: 5
+
+projectname: ct-slice-stablediffusion-ct-rate
+wandb: True

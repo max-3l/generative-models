@@ -88,9 +88,18 @@ class DiffusionEngine(pl.LightningModule):
         no_cond_log: bool = False,
         compile_model: bool = False,
         en_and_decode_n_samples_a_time: Optional[int] = None,
-        num_frames=None
+        num_frames=None,
+        network_dtype="float32"
     ):
         super().__init__()
+        dtype = "float32"
+        if network_dtype == "float32":
+            dtype = torch.float32
+        elif network_dtype == "bfloat16":
+            dtype = torch.bfloat16
+        else:
+            raise ValueError(f"network_dtype must be either float32 or bfloat16.")
+        
         if ckpt_path is not None:
             print(f"Restoring diffusion from {ckpt_path}")
         self.num_frames = num_frames
@@ -125,7 +134,10 @@ class DiffusionEngine(pl.LightningModule):
             instantiate_from_config(loss_fn_config)
             if loss_fn_config is not None
             else None
-        )
+        ).to()
+
+        self.model = self.model.to(dtype)
+        self.loss_fn = self.loss_fn.to(dtype)
 
         self.use_ema = use_ema
         if self.use_ema:
@@ -135,6 +147,7 @@ class DiffusionEngine(pl.LightningModule):
         self.scale_factor = scale_factor
         self.disable_first_stage_autocast = disable_first_stage_autocast
         self.no_cond_log = no_cond_log
+
 
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path)
@@ -226,6 +239,14 @@ class DiffusionEngine(pl.LightningModule):
         x = self.encode_first_stage(x)
         conditioning = self.conditioner.forward_for_cache(batch)
         return x, conditioning
+
+    def validation_step(self, batch, batch_idx):
+        metrics = self.batch_sample_metrics(batch, return_images=False)
+        metrics = { f"val/{key}": el for key, el in metrics.items() }
+        with self.ema_scope():
+            ema_metrics = self.batch_sample_metrics(batch, return_images=False)
+        ema_metrics = { f"val_ema/{key}": el for key, el in metrics.items() }
+        return metrics | ema_metrics
 
     def training_step(self, batch, batch_idx):
         loss, loss_dict = self.shared_step(batch)
@@ -440,7 +461,8 @@ class DiffusionEngine(pl.LightningModule):
     def batch_sample_metrics(
         self,
         batch: Dict,
-        ucg_keys: List[str] = None
+        ucg_keys: List[str] = None,
+        return_images = True,
     ) -> Dict:
         conditioner_input_keys = [e.input_key for e in self.conditioner.embedders]
         if ucg_keys:
@@ -491,5 +513,7 @@ class DiffusionEngine(pl.LightningModule):
         video_samples = rearrange(video_samples, "b t c h w -> b c t h w")
         video_inputs = rearrange(video_inputs, "b t c h w -> b c t h w")
         psnr, ssim = compute_3d_psnr_ssim(video_inputs, video_samples, data_range=(-1, 1))
-        print(f"PSNR: {psnr.shape}, SSIM: {ssim.shape}")
-        return { "psnr": psnr, "ssim": ssim, "video_samples": video_samples, "video_inputs": video_inputs }
+        output = { "psnr": psnr, "ssim": ssim, "mse": (video_samples - video_inputs).pow(2).flatten(start_dim=1).mean(dim=1) }
+        if return_images:
+            output |= { "video_samples": video_samples, "video_inputs": video_inputs }
+        return output

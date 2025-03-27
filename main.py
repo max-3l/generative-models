@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import glob
+import importlib
 import inspect
 import os
 import sys
@@ -25,9 +26,13 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.trainer import Trainer
 from pytorch_lightning.utilities import rank_zero_only
 
+
+# Import the new module
+sys.modules["pytorch_lightning.utilities.distributed"] = importlib.import_module("pytorch_lightning.utilities")
+
 from sgm.util import exists, instantiate_from_config, isheatmap
 
-MULTINODE_HACKS = True
+MULTINODE_HACKS = False
 
 
 def default_trainer_args():
@@ -360,7 +365,7 @@ class ImageLogger(Callback):
                 )
                 os.makedirs(root, exist_ok=True)
                 path = os.path.join(root, filename)
-                imageio.mimwrite(path, grid, fps=8, macro_block_size=1)
+                imageio.mimwrite(path, grid, fps=8, macro_block_size=1) # type: ignore
 
             elif k.startswith("video_"):
                 videos = images[k]
@@ -378,7 +383,7 @@ class ImageLogger(Callback):
                 )
                 os.makedirs(root, exist_ok=True)
                 path = os.path.join(root, filename)
-                imageio.mimwrite(path, grid, fps=8, macro_block_size=1)
+                imageio.mimwrite(path, grid, fps=8, macro_block_size=1, format="mp4") # type: ignore
 
             elif isheatmap(images[k]):
                 fig, ax = plt.subplots()
@@ -451,9 +456,9 @@ class ImageLogger(Callback):
                 "cache_enabled": torch.is_autocast_cache_enabled(),
             }
             with torch.no_grad(), torch.amp.autocast("cuda", **gpu_autocast_kwargs):
-                images = pl_module.log_images(
+                images: dict = pl_module.log_images(
                     batch, split=split, **self.log_images_kwargs
-                )
+                ) # type: ignore
 
             for k in images:
                 N = min(images[k].shape[0], self.max_images)
@@ -762,7 +767,9 @@ if __name__ == "__main__":
         if hasattr(model, "monitor"):
             print(f"Monitoring {model.monitor} as checkpoint metric.")
             default_modelckpt_cfg["params"]["monitor"] = model.monitor
-            default_modelckpt_cfg["params"]["save_top_k"] = 3
+            default_modelckpt_cfg["params"]["save_top_k"] = 5
+            default_modelckpt_cfg["params"]["auto_insert_metric_name"] = False
+            default_modelckpt_cfg["params"]["filename"] = default_modelckpt_cfg["params"]["filename"] + "-" + model.monitor.replace("/", "-") + "={" + model.monitor + ":.5f}"
 
         if "modelcheckpoint" in lightning_config:
             modelckpt_cfg = lightning_config.modelcheckpoint
@@ -835,11 +842,12 @@ if __name__ == "__main__":
                     "target": "pytorch_lightning.callbacks.ModelCheckpoint",
                     "params": {
                         "dirpath": os.path.join(ckptdir, "trainstep_checkpoints"),
-                        "filename": "{epoch:06}-{step:09}",
+                        "filename": "e{epoch:06}-s{step:09}" if not (hasattr(model, "monitor") and model.monitor is not None) else ("e{epoch:06}-s{step:09}" + f"-{model.monitor.replace("/", "-")}=" + "{" + model.monitor  + ":.5f}") ,
                         "verbose": True,
                         "save_top_k": -1,
-                        "every_n_train_steps": 10000,
-                        "save_weights_only": True,
+                        "every_n_train_steps": callbacks_cfg.metrics_over_trainsteps_checkpoint.params.every_n_train_steps,
+                        "save_weights_only": False,
+                        "auto_insert_metric_name": False,
                     },
                 }
             }
@@ -919,7 +927,7 @@ if __name__ == "__main__":
         # allow checkpointing via USR1
         def melk(*args, **kwargs):
             # run all checkpoint hooks
-            if trainer.global_rank == 0:
+            if trainer.global_rank == 0 and trainer.global_step > 5:
                 print("Summoning checkpoint.")
                 if melk_ckpt_name is None:
                     ckpt_path = os.path.join(ckptdir, "last.ckpt")

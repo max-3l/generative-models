@@ -19,3 +19,4 @@
 /logs/**/*.ckpt
 /logs/**/*.wandb
 /cache
+*.pth

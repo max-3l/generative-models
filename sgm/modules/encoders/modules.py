@@ -167,7 +167,7 @@ class GeneralConditioner(nn.Module):
                 ):
                     emb = torch.zeros_like(emb)
                 if out_key in output:
-                    print(f"Concatenating {out_key} ({output[out_key].shape}) with shape {emb.shape}")
+                    # print(f"Concatenating {out_key} ({output[out_key].shape}) with shape {emb.shape}")
                     output[out_key] = torch.cat(
                         (output[out_key], emb), self.KEY2CATDIM[out_key]
                     )

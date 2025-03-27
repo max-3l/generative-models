@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 import datetime
 import glob
 import inspect
+import json
 import os
 from pathlib import Path
 import sys
@@ -203,6 +204,12 @@ def get_parser(**parser_kwargs):
         )
     parser.add_argument(
         "--ckpt_path",
+        type=str,
+        default=None,
+        required=True
+    )
+    parser.add_argument(
+        "--out_path",
         type=str,
         default=None,
         required=True
@@ -918,17 +925,17 @@ if __name__ == "__main__":
     signal.signal(signal.SIGUSR1, melk)
     signal.signal(signal.SIGUSR2, divein)
 
-    data.condition_cache_path = None
     data.setup("")
     dataset = data.validation_dataset
-    batch_size = 4
+    split = "validation"
+    batch_size = 16
     model = model.cuda()
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=4, pin_memory=True, drop_last=False)
     all_psnr = []
     all_ssim = []
+    all_mse = []
     model = model.eval()
-    model.model = model.model.to(dtype=torch.bfloat16)
-    out_dir = Path("outputs") / nowname
+    out_dir = Path("outputs") / opt.out_path / split
     out_dir.mkdir(parents=True, exist_ok=True)
     with torch.no_grad():
         for i, batch in enumerate((bar := tqdm(dataloader, total=len(dataloader), desc="Validating"))):
@@ -936,28 +943,44 @@ if __name__ == "__main__":
                 if isinstance(batch[el], torch.Tensor):
                     batch[el] = batch[el].cuda()
             metrics = model.batch_sample_metrics(batch)
-            inputs, samples = metrics["video_inputs"], metrics["video_samples"]
-            inputs = (inputs + 1) / 2
-            samples = (samples + 1) / 2
-            diff = (samples - inputs).abs()
-            # Log images as video
-            # Make grid
-            grid = torch.cat([inputs, samples, diff], dim=4)
-            t = grid.shape[2]
-            grid = rearrange(grid, "b c t h w -> b (c t) h w")
-            grid = torchvision.utils.make_grid(grid, nrow=1)
-            grid = rearrange(grid, "(c t) h w -> t h w c", t=t)
-            grid = (grid * 255).clamp(0, 255).byte()
-            # Write grid as video
-            imageio.mimwrite(out_dir / f"{i}.mp4", grid.cpu().numpy(force=True), fps=8, macro_block_size=1)
-
-            for psnr in metrics["psnr"]:
+            # inputs, samples = metrics["video_inputs"], metrics["video_samples"]
+            # inputs = (inputs + 1) / 2
+            # samples = (samples + 1) / 2
+            # diff = (samples - inputs).abs()
+            # # Log images as video
+            # # Make grid
+            # grid = torch.cat([inputs, samples, diff], dim=4)
+            # t = grid.shape[2]
+            # grid = rearrange(grid, "b c t h w -> b (c t) h w")
+            # grid = torchvision.utils.make_grid(grid, nrow=1)
+            # grid = rearrange(grid, "(c t) h w -> t h w c", t=t)
+            # grid = (grid * 255).clamp(0, 255).byte()
+            # # Write grid as video
+            # imageio.mimwrite(out_dir / f"{i}.mp4", grid.cpu().numpy(force=True), fps=8, macro_block_size=1)
+            for scan_id, psnr, ssim, mse in zip(batch["scan_id"], metrics["psnr"], metrics["ssim"], metrics["mse"]):
                 all_psnr.append(psnr.cpu().item())
-            for ssim in metrics["ssim"]:
                 all_ssim.append(ssim.cpu().item())
+                all_mse.append(mse.cpu().item())
+                (out_dir / scan_id).mkdir(exist_ok=True)
+                with open(out_dir / scan_id / "metrics.json", "w") as f:
+                    json.dump({
+                        "psnr": psnr.cpu().item(),
+                        "ssim": ssim.cpu().item(),
+                        "mse": mse.cpu().item()
+                    }, f)
 
-            bar.set_postfix({ "PSNR": f"{np.mean(all_psnr):.3f}", "SSIM": f"{np.mean(all_ssim):.3f}" })
-    print("Saved videos to", out_dir)
+            bar.set_postfix({ "PSNR": f"{np.mean(all_psnr):.3f}", "SSIM": f"{np.mean(all_ssim):.3f}", "MSE": f"{np.mean(all_mse)}" })
+
     print("Validation results:")
     print(f"PSNR: {np.mean(all_psnr): .5f} +- {np.std(all_psnr): .5f}")
     print(f"SSIM: {np.mean(all_ssim):.5f} +- {np.std(all_ssim):.5f}")
+    print(f"MSE: {np.mean(all_mse):.5f} +- {np.std(all_mse):.5f}")
+    with open(out_dir / "metrics.json", "w") as f:
+        json.dump({
+            "psnr_mean": np.mean(all_psnr),
+            "psnr_std": np.std(all_psnr),
+            "ssim_mean": np.mean(all_ssim),
+            "ssim_std": np.std(all_ssim),
+            "mse_mean": np.mean(all_mse),
+            "mse_std": np.std(all_mse)
+        }, f)

@@ -1,0 +1,6 @@
+#!/bin/bash
+set -e
+conda run -n stablediffusion --live-stream python3 main-validate-diffusion.py --base logs/2025-03-26T01-04-16_x2ct_ct_rate-ct-diffusion-sv3d-diffusion-ct-128-text-bf16/configs/* --ckpt_path logs/2025-03-26T01-04-16_x2ct_ct_rate-ct-diffusion-sv3d-diffusion-ct-128-text-bf16/checkpoints/last.ckpt --out_path vae-text-bf16
+conda run -n stablediffusion --live-stream python3 main-validate-diffusion.py --base logs/2025-03-25T22-24-47_x2ct_ct_rate-ct-diffusion-sv3d-diffusion-ct-128-bf16/configs/* --ckpt_path logs/2025-03-25T22-24-47_x2ct_ct_rate-ct-diffusion-sv3d-diffusion-ct-128-bf16/checkpoints/last.ckpt --out_path vae-bf16
+conda run -n stablediffusion --live-stream python3 main-validate-diffusion.py --base logs/2025-03-25T21-36-50_x2ct_ct_rate-ct-diffusion-sv3d-diffusion-ct-128/configs/* --ckpt_path logs/2025-03-25T21-36-50_x2ct_ct_rate-ct-diffusion-sv3d-diffusion-ct-128/checkpoints/last.ckpt --out_path vae-fp32
+conda run -n stablediffusion --live-stream python3 main-validate-diffusion.py --base logs/2025-03-25T22-24-47_x2ct_ct_rate-ct-diffusion-sv3d-diffusion-ct-128-bf16/configs/* --ckpt_path logs/2025-03-25T22-24-47_x2ct_ct_rate-ct-diffusion-sv3d-diffusion-ct-128-bf16/checkpoints/trainstep_checkpoints/e000001-s000005000.ckpt --out_path vae-bf16-first-ckpt
