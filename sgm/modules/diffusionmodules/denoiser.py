@@ -34,7 +34,6 @@ class Denoiser(nn.Module):
         c_skip, c_out, c_in, c_noise = self.scaling(sigma)
         c_noise = self.possibly_quantize_c_noise(c_noise.reshape(sigma_shape))
         net_out = network(input * c_in, c_noise, cond, **additional_model_inputs)
-        # import pdb; pdb.set_trace()
         scaled_net_out = net_out * c_out
         scaled_input = input * c_skip
         return scaled_net_out + scaled_input

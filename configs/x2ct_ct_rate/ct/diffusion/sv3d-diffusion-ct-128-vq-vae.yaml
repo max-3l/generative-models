@@ -11,7 +11,7 @@ model:
     en_and_decode_n_samples_a_time: 32
     log_keys:
       - xrays
-    network_dtype: bfloat16
+    network_dtype: float32
 
     # scheduler_config:
     #   target: sgm.lr_scheduler.LambdaLinearScheduler
@@ -179,7 +179,7 @@ data:
     # condition_cache_path: cache/sv3d256notext
     train:
       loader:
-        batch_size: 12
+        batch_size: 6
         num_workers: 24
         shuffle: True
       dataset:
@@ -192,7 +192,7 @@ data:
           output_dtype: float32
     validation:
       loader:
-          batch_size: 12
+          batch_size: 6
           num_workers: 24
           shuffle: False
       dataset:
@@ -215,7 +215,7 @@ lightning: # lightning_config
     devices: 0,
     benchmark: True
     num_sanity_val_steps: 0
-    accumulate_grad_batches: 1
+    accumulate_grad_batches: 2
     max_epochs: 1000
     # strategy: "deepspeed_stage_3"
     precision: '32-true'

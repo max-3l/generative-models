@@ -50,8 +50,8 @@ def load_data(file_paths, file_names):
     dataframes = {}
     for file_path, file_name in zip(file_paths, file_names):
         try:
-            df = pd.read_csv(file_path)
-            dataframes[file_name] = df  # Use the provided file_name as the key
+            df = pd.concat((pd.read_csv(el) for el in sorted(list(Path(file_path).parent.parent.glob("*/*.csv")))), axis=1)
+            dataframes[file_name] = df.reset_index(drop=True)  # Use the provided file_name as the key
         except Exception as e:
             st.error(f"Error reading file {file_path}: {e}")
             # Consider logging the error for debugging

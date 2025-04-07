@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1e-5
+  base_learning_rate: 1.0e-05
   target: sgm.models.diffusion.DiffusionEngine
   params:
     input_key: ct_video
@@ -7,84 +7,79 @@ model:
     num_frames: 128
     network_wrapper: sgm.modules.diffusionmodules.wrappers.OpenAIVideoWrapper
     scale_factor: 0.18215
-    disable_first_stage_autocast: True
+    disable_first_stage_autocast: true
     en_and_decode_n_samples_a_time: 32
     log_keys:
-      - xrays
-    network_dtype: bfloat16
-
-    # scheduler_config:
-    #   target: sgm.lr_scheduler.LambdaLinearScheduler
-    #   params:
-    #     warm_up_steps: [200]
-    #     cycle_lengths: [10000000000000]
-    #     f_start: [1.e-4]
-    #     f_max: [1.]
-    #     f_min: [1.]
-
+    - xrays
+    network_dtype: float32
     denoiser_config:
       target: sgm.modules.diffusionmodules.denoiser.Denoiser
       params:
         scaling_config:
           target: sgm.modules.diffusionmodules.denoiser_scaling.VScalingWithEDMcNoise
-
     loss_fn_config:
       target: sgm.modules.diffusionmodules.loss.StandardDiffusionLoss
       params:
         batch2model_keys:
-          - image_only_indicator
+        - image_only_indicator
         loss_weighting_config:
           target: sgm.modules.diffusionmodules.loss_weighting.EpsWeighting
         sigma_sampler_config:
           target: sgm.modules.diffusionmodules.sigma_sampling.DiscreteSampling
           params:
             num_idx: 1000
-
             discretization_config:
               target: sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization
-
     network_config:
       target: sgm.modules.diffusionmodules.video_model.VideoUNet
       params:
         adm_in_channels: 256
         num_classes: sequential
-        use_checkpoint: True
-        in_channels: 272 # 256 ct + 8 xray 1 + 8 xray 2
-        out_channels: 256
+        use_checkpoint: true
+        in_channels: 24
+        out_channels: 8
         model_channels: 320
-        attention_resolutions: [4, 2, 1]
+        attention_resolutions:
+        - 4
+        - 2
+        - 1
         num_res_blocks: 2
-        channel_mult: [1, 2, 4, 4]
+        channel_mult:
+        - 1
+        - 2
+        - 4
+        - 4
         num_head_channels: 64
-        use_linear_in_transformer: True
+        use_linear_in_transformer: true
         transformer_depth: 1
         context_dim: 512
         spatial_transformer_attn_type: softmax-xformers
-        extra_ff_mix_layer: True
-        use_spatial_context: True
+        extra_ff_mix_layer: true
+        use_spatial_context: true
         merge_strategy: learned_with_images
-        video_kernel_size: [3, 1, 1]
-
+        video_kernel_size:
+        - 3
+        - 1
+        - 1
     conditioner_config:
       target: sgm.modules.GeneralConditioner
       params:
         emb_models:
-        - input_key: xrays # crossattn (dims=3)
-          is_trainable: False
+        - input_key: xrays
+          is_trainable: false
           target: sgm.modules.encoders.modules.FrozenOpenCLIPImagePredictionEmbedderXrays
           params:
             open_clip_embedding_config:
               target: sgm.modules.encoders.modules.FrozenOpenCLIPImageEmbedderMedical
               params: {}
-
-        - input_key: xrays # concat (dims=4)
-          is_trainable: False
+        - input_key: xrays
+          is_trainable: false
           target: sgm.modules.encoders.modules.VideoPredictionEmbedderWithEncoder
           params:
-            disable_encoder_autocast: True
+            disable_encoder_autocast: true
             n_cond_frames: 2
-            n_copies: 1 # Number of frames to generate
-            is_ae: True
+            n_copies: 1
+            is_ae: true
             encoder_config:
               target: sgm.models.autoencoder.AutoencodingEngine
               params:
@@ -103,7 +98,11 @@ model:
                     in_channels: 1
                     out_ch: 1
                     ch: 128
-                    ch_mult: [1, 2, 4, 4]
+                    ch_mult:
+                    - 1
+                    - 2
+                    - 4
+                    - 4
                     num_res_blocks: 2
                     attn_resolutions: []
                     dropout: 0.0
@@ -117,17 +116,19 @@ model:
                     in_channels: 1
                     out_ch: 1
                     ch: 128
-                    ch_mult: [1, 2, 4, 4]
+                    ch_mult:
+                    - 1
+                    - 2
+                    - 4
+                    - 4
                     num_res_blocks: 2
                     attn_resolutions: []
                     dropout: 0.0
-
         - input_key: cond_aug
-          is_trainable: False
+          is_trainable: false
           target: sgm.modules.encoders.modules.ConcatTimestepEmbedderNDCT
           params:
             outdim: 256
-
     first_stage_config:
       target: sgm.models.autoencoder.AutoencodingEngine
       params:
@@ -144,9 +145,14 @@ model:
             in_channels: 1
             out_ch: 1
             ch: 128
-            ch_mult: [1, 2, 2, 4]
+            ch_mult:
+            - 1
+            - 2
+            - 2
+            - 4
             num_res_blocks: 2
-            attn_resolutions: [16]
+            attn_resolutions:
+            - 16
             dropout: 0.0
         decoder_config:
           target: sgm.modules.diffusionmodules.model.Decoder
@@ -156,7 +162,6 @@ model:
           params:
             n_e: 1024
             e_dim: 256
-
     sampler_config:
       target: sgm.modules.diffusionmodules.sampling.EulerEDMSampler
       params:
@@ -165,23 +170,20 @@ model:
           target: sgm.modules.diffusionmodules.discretizer.EDMDiscretization
           params:
             sigma_max: 700.0
-
         guider_config:
           target: sgm.modules.diffusionmodules.guiders.TrianglePredictionGuider
           params:
             max_scale: 2.5
             num_frames: 128
-
 data:
   target: sgm.data.ct_rate.CTVideo128Dataloader
   params:
     num_slices: 128
-    # condition_cache_path: cache/sv3d256notext
     train:
       loader:
         batch_size: 12
         num_workers: 24
-        shuffle: True
+        shuffle: true
       dataset:
         target: x2ct_datasets.ct_rate.dataset.CTRATEDatasetWithText
         params:
@@ -192,9 +194,9 @@ data:
           output_dtype: float32
     validation:
       loader:
-          batch_size: 12
-          num_workers: 24
-          shuffle: False
+        batch_size: 12
+        num_workers: 24
+        shuffle: false
       dataset:
         target: x2ct_datasets.ct_rate.dataset.CTRATEDatasetWithText
         params:
@@ -203,40 +205,3 @@ data:
           load_xray: true
           downsample_size: 128
           output_dtype: float32
-
-
-lightning: # lightning_config
-  modelcheckpoint: # Checkpointing based on monitoring
-    params:
-      every_n_train_steps: 300
-      save_on_train_epoch_end: True
-
-  trainer: # trainer_config
-    devices: 0,
-    benchmark: True
-    num_sanity_val_steps: 0
-    accumulate_grad_batches: 1
-    max_epochs: 1000
-    # strategy: "deepspeed_stage_3"
-    precision: '32-true'
-    # Validation takes a long time - only run validation step on one batch
-    limit_val_batches: 1
-    val_check_interval: 0.5 # Every half an epoch
-  
-  callbacks:
-    metrics_over_trainsteps_checkpoint:
-      params:
-        every_n_train_steps: 5000
-
-    image_logger:
-      target: main.ImageLogger
-      params:
-        disabled: False
-        batch_frequency: 1000
-        max_images: 64
-        increase_log_steps: True
-        log_first_step: True
-        log_images_kwargs:
-          use_ema_scope: False
-          N: 64
-          n_rows: 8

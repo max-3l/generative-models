@@ -59,7 +59,8 @@ VERSION2SPECS = {
         "f": 8,
         "is_legacy": True,
         "config": "configs/inference/sd_2_1.yaml",
-        "ckpt": "checkpoints/v2-1_512-ema-pruned.safetensors",
+        # "ckpt": "checkpoints/v2-1_512-ema-pruned.safetensors",
+        "ckpt": None,
     },
     "SD-2.1-768": {
         "H": 768,

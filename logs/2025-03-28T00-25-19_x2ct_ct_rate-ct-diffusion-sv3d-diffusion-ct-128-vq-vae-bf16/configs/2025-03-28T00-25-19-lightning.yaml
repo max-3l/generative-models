@@ -1,7 +1,7 @@
 lightning:
   modelcheckpoint:
     params:
-      every_n_train_steps: 200
+      every_n_train_steps: 300
       save_on_train_epoch_end: true
   trainer:
     devices: 0,
@@ -9,12 +9,14 @@ lightning:
     num_sanity_val_steps: 0
     accumulate_grad_batches: 1
     max_epochs: 1000
-    precision: bf16-true
+    precision: 32-true
+    limit_val_batches: 1
+    val_check_interval: 0.5
     accelerator: gpu
   callbacks:
     metrics_over_trainsteps_checkpoint:
       params:
-        every_n_train_steps: 500
+        every_n_train_steps: 5000
     image_logger:
       target: main.ImageLogger
       params:

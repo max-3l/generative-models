@@ -89,9 +89,11 @@ class DiffusionEngine(pl.LightningModule):
         compile_model: bool = False,
         en_and_decode_n_samples_a_time: Optional[int] = None,
         num_frames=None,
-        network_dtype="float32"
+        network_dtype="float32",
+        monitor="loss"
     ):
         super().__init__()
+        self.monitor = monitor
         dtype = "float32"
         if network_dtype == "float32":
             dtype = torch.float32
@@ -134,10 +136,11 @@ class DiffusionEngine(pl.LightningModule):
             instantiate_from_config(loss_fn_config)
             if loss_fn_config is not None
             else None
-        ).to()
+        )
 
         self.model = self.model.to(dtype)
-        self.loss_fn = self.loss_fn.to(dtype)
+        if self.loss_fn is not None:
+            self.loss_fn = self.loss_fn.to(dtype)
 
         self.use_ema = use_ema
         if self.use_ema:
@@ -224,7 +227,7 @@ class DiffusionEngine(pl.LightningModule):
     def forward(self, x, batch):
         loss = self.loss_fn(self.model, self.denoiser, self.conditioner, x, batch)
         loss_mean = loss.mean()
-        loss_dict = {"loss": loss_mean}
+        loss_dict = {"train/loss": loss_mean}
         return loss_mean, loss_dict
 
     def shared_step(self, batch: Dict) -> Any:
@@ -233,7 +236,7 @@ class DiffusionEngine(pl.LightningModule):
         batch["global_step"] = self.global_step
         loss, loss_dict = self(x, batch)
         return loss, loss_dict
-    
+
     def cache_step(self, batch: Dict) -> Tuple[torch.Tensor, Dict]:
         x = self.get_input(batch)
         x = self.encode_first_stage(x)
@@ -246,7 +249,9 @@ class DiffusionEngine(pl.LightningModule):
         with self.ema_scope():
             ema_metrics = self.batch_sample_metrics(batch, return_images=False)
         ema_metrics = { f"val_ema/{key}": el for key, el in metrics.items() }
-        return metrics | ema_metrics
+        all_metrics = metrics | ema_metrics
+        self.log_dict(all_metrics)
+        return all_metrics
 
     def training_step(self, batch, batch_idx):
         loss, loss_dict = self.shared_step(batch)
@@ -474,8 +479,6 @@ class DiffusionEngine(pl.LightningModule):
             ucg_keys = conditioner_input_keys
         log = dict()
 
-        
-
         x = batch[self.input_key]
         x = x.to(self.device)
         N = x.shape[0]
@@ -503,17 +506,17 @@ class DiffusionEngine(pl.LightningModule):
                 c[k], uc[k] = map(lambda y: y[k].to(self.device), (c, uc))
 
         with self.ema_scope("Plotting"):
-            samples = self.sample(
+            sample_latents = self.sample(
                 c, shape=z.shape[1:], uc=uc, batch_size=z.shape[0], **sampling_kwargs
             )
-        samples = self.decode_first_stage(samples.to(dtype=self.first_stage_model.decoder.conv_in.weight.dtype))
+        samples = self.decode_first_stage(sample_latents.to(dtype=self.first_stage_model.decoder.conv_in.weight.dtype))
         video_samples = samples.reshape(N, -1, *samples.shape[1:])
         video_samples = video_samples.clamp(-1, 1)
         video_inputs = video_inputs.clamp(-1, 1)
         video_samples = rearrange(video_samples, "b t c h w -> b c t h w")
         video_inputs = rearrange(video_inputs, "b t c h w -> b c t h w")
         psnr, ssim = compute_3d_psnr_ssim(video_inputs, video_samples, data_range=(-1, 1))
-        output = { "psnr": psnr, "ssim": ssim, "mse": (video_samples - video_inputs).pow(2).flatten(start_dim=1).mean(dim=1) }
+        output = { "psnr": psnr, "ssim": ssim, "mse": (video_samples - video_inputs).pow(2).flatten(start_dim=1).mean(dim=1), "mse_latents": (z - sample_latents).pow(2).flatten(start_dim=1).mean(dim=1) }
         if return_images:
             output |= { "video_samples": video_samples, "video_inputs": video_inputs }
         return output

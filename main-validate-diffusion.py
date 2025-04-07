@@ -214,6 +214,7 @@ def get_parser(**parser_kwargs):
         default=None,
         required=True
     )
+    # parser.add_argument("--save_samples", action="store_true")
     default_args = default_trainer_args()
     for key in default_args:
         parser.add_argument("--" + key, default=default_args[key])
@@ -926,8 +927,8 @@ if __name__ == "__main__":
     signal.signal(signal.SIGUSR2, divein)
 
     data.setup("")
-    dataset = data.validation_dataset
-    split = "validation"
+    dataset = data.train_dataset
+    split = "train"
     batch_size = 16
     model = model.cuda()
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=4, pin_memory=True, drop_last=False)
@@ -957,7 +958,7 @@ if __name__ == "__main__":
             # grid = (grid * 255).clamp(0, 255).byte()
             # # Write grid as video
             # imageio.mimwrite(out_dir / f"{i}.mp4", grid.cpu().numpy(force=True), fps=8, macro_block_size=1)
-            for scan_id, psnr, ssim, mse in zip(batch["scan_id"], metrics["psnr"], metrics["ssim"], metrics["mse"]):
+            for scan_id, psnr, ssim, mse, samples in zip(batch["scan_id"], metrics["psnr"], metrics["ssim"], metrics["mse"], metrics["video_samples"]):
                 all_psnr.append(psnr.cpu().item())
                 all_ssim.append(ssim.cpu().item())
                 all_mse.append(mse.cpu().item())
@@ -968,6 +969,8 @@ if __name__ == "__main__":
                         "ssim": ssim.cpu().item(),
                         "mse": mse.cpu().item()
                     }, f)
+
+                torch.save(samples.cpu(), out_dir / scan_id / "samples.pth")
 
             bar.set_postfix({ "PSNR": f"{np.mean(all_psnr):.3f}", "SSIM": f"{np.mean(all_ssim):.3f}", "MSE": f"{np.mean(all_mse)}" })
 

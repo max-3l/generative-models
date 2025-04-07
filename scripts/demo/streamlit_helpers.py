@@ -12,7 +12,6 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as TT
 from einops import rearrange, repeat
-from imwatermark import WatermarkEncoder
 from omegaconf import ListConfig, OmegaConf
 from PIL import Image
 from safetensors.torch import load_file as load_safetensors

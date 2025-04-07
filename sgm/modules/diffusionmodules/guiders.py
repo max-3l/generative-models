@@ -1,6 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 import torch
 from einops import rearrange, repeat
@@ -114,7 +114,7 @@ class TrianglePredictionGuider(LinearPredictionGuider):
         # Constructs a triangle wave
         if isinstance(period, float):
             period = [period]
-
+        period = cast(List[float], period)
         scales = []
         for p in period:
             scales.append(self.triangle_wave(values, p))

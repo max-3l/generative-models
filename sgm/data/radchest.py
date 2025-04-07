@@ -282,7 +282,7 @@ class XCT_H5_dataset(Dataset):
         Returns:
             dict: A dictionary containing the loaded and preprocessed embedding views.
         """
-        with h5py.File("/raid/maximilian.schulze/masterthesis/vqgan_embeddings.h5", 'r') as h5:
+        with h5py.File("/data/shared/x2ct/backup-maximilian.schulze/maximilian.schulze/masterthesis/vqgan_embeddings.h5", 'r') as h5:
             group = h5[name]
             return {
                 "first_view_emb": group["first_view_emb"].__array__(dtype=np.float32),
@@ -428,7 +428,8 @@ class CT_Rate_dataset(XCT_H5_dataset):
             assert os.path.exists(h5_text_dataset_path), f"Error: {h5_text_dataset_path} not found!"
             self.h5_text_dataset_path = Path(h5_text_dataset_path)
             self.h5_text_group_path = h5_text_group_path.split('/')
-            raw_text_path = "/raid/shared/x2ct/ct-rate-models/train_reports.csv" if train else "/raid/shared/x2ct/ct-rate-models/validation_reports.csv"
+            raw_text_path = "/home/maximilian.schulze/datasets/CT-RATE/dataset/radiology_text_reports/"
+            raw_text_path += "train_reports.csv" if train else "validation_reports.csv"
             self.raw_text_csv = pd.read_csv(raw_text_path, index_col="VolumeName")
         else:
             logging.info("Not loading text data.")
@@ -673,80 +674,84 @@ class XRAY_dataset(XCT_H5_dataset):
         xray_data = self.load_xray_data(name, [idx % self.num_projections])
         return data | xray_data
 
-class CachedXCT_H5_dataset(torch.utils.data.Dataset):
+class CachedXCT_H5_dataset(XCT_H5_dataset):
     def __init__(self, cache_dir: str, optimize_zip: bool, *args, **kwargs):
-        base_dataset = XCT_H5_dataset
-        self.optimize_zip = optimize_zip
-        self.cache_dir = Path(cache_dir)
-        self.cache_hash = self._compute_hash(base_dataset, args, kwargs)
-        self.cache_path = self.cache_dir / self.cache_hash
-        print("Dataset cache path:", self.cache_path)
-        self.status_file = self.cache_path / "_status.txt"
-        self.check_and_build_cache(base_dataset, args, kwargs)
-        self.length = self.compute_length()
+        super().__init__(*args, **kwargs)
 
-    def _compute_hash(self, base_dataset, args, kwargs):
-        hash_input = str(base_dataset) + str(args) + str(kwargs)
-        if self.optimize_zip:
-            hash_input += "zip"
-        return hashlib.md5(hash_input.encode()).hexdigest()
+# class CachedXCT_H5_dataset(torch.utils.data.Dataset):
+#     def __init__(self, cache_dir: str, optimize_zip: bool, *args, **kwargs):
+#         base_dataset = XCT_H5_dataset
+#         self.optimize_zip = optimize_zip
+#         self.cache_dir = Path(cache_dir)
+#         self.cache_hash = self._compute_hash(base_dataset, args, kwargs)
+#         self.cache_path = self.cache_dir / self.cache_hash
+#         print("Dataset cache path:", self.cache_path)
+#         self.status_file = self.cache_path / "_status.txt"
+#         self.check_and_build_cache(base_dataset, args, kwargs)
+#         self.length = self.compute_length()
 
-    def _build_cache(self, base_dataset, args, kwargs):
-        self.cache_path.mkdir(parents=True, exist_ok=True)
-        dataset = base_dataset(*args, **kwargs)
+#     def _compute_hash(self, base_dataset, args, kwargs):
+#         hash_input = str(base_dataset) + str(args) + str(kwargs)
+#         if self.optimize_zip:
+#             hash_input += "zip"
+#         return hashlib.md5(hash_input.encode()).hexdigest()
 
-        def process_item(idx):
-            item = dataset[idx]
-            item_path = self.cache_path / f"{idx}"
-            if self.optimize_zip:
-                with zipfile.ZipFile(item_path.with_suffix(".zip"), 'w', compression=zipfile.ZIP_DEFLATED) as z:
-                    with z.open('data.pkl', 'w') as f:
-                        pickle.dump(item, f)
-            else:
-                with open(item_path.with_suffix(".pkl"), 'wb') as f:
-                    pickle.dump(item, f)
+#     def _build_cache(self, base_dataset, args, kwargs):
+#         self.cache_path.mkdir(parents=True, exist_ok=True)
+#         dataset = base_dataset(*args, **kwargs)
 
-        with ThreadPoolExecutor() as executor:
-            list(tqdm.tqdm(executor.map(process_item, range(len(dataset))), total=len(dataset), desc=f"Building cache {self.cache_path}"))
+#         def process_item(idx):
+#             item = dataset[idx]
+#             item_path = self.cache_path / f"{idx}"
+#             if self.optimize_zip:
+#                 with zipfile.ZipFile(item_path.with_suffix(".zip"), 'w', compression=zipfile.ZIP_DEFLATED) as z:
+#                     with z.open('data.pkl', 'w') as f:
+#                         pickle.dump(item, f)
+#             else:
+#                 with open(item_path.with_suffix(".pkl"), 'wb') as f:
+#                     pickle.dump(item, f)
+
+#         with ThreadPoolExecutor() as executor:
+#             list(tqdm.tqdm(executor.map(process_item, range(len(dataset))), total=len(dataset), desc=f"Building cache {self.cache_path}"))
         
-        with open(self.status_file, 'w') as f:
-            f.write("done")
-        with open(self.cache_path / "_hash.txt", 'w') as f:
-            f.write(self.cache_hash)
-        with open(self.cache_path / "_args.txt", 'w') as f:
-            f.write(str(args))
-        with open(self.cache_path / "_kwargs.txt", 'w') as f:
-            f.write(str(kwargs))
+#         with open(self.status_file, 'w') as f:
+#             f.write("done")
+#         with open(self.cache_path / "_hash.txt", 'w') as f:
+#             f.write(self.cache_hash)
+#         with open(self.cache_path / "_args.txt", 'w') as f:
+#             f.write(str(args))
+#         with open(self.cache_path / "_kwargs.txt", 'w') as f:
+#             f.write(str(kwargs))
 
-    def check_and_build_cache(self, base_dataset, args, kwargs):
-        if not self.cache_path.exists():
-            self.cache_path.mkdir(parents=True, exist_ok=True)
-        lock_file = self.cache_path / "_lockfile"
-        with open(lock_file, 'w') as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            if not self.status_file.exists():
-                self._build_cache(base_dataset, args, kwargs)
-            fcntl.flock(f, fcntl.LOCK_UN)
+#     def check_and_build_cache(self, base_dataset, args, kwargs):
+#         if not self.cache_path.exists():
+#             self.cache_path.mkdir(parents=True, exist_ok=True)
+#         lock_file = self.cache_path / "_lockfile"
+#         with open(lock_file, 'w') as f:
+#             fcntl.flock(f, fcntl.LOCK_EX)
+#             if not self.status_file.exists():
+#                 self._build_cache(base_dataset, args, kwargs)
+#             fcntl.flock(f, fcntl.LOCK_UN)
 
-    def compute_length(self):
-        if self.optimize_zip:
-            return len(list(self.cache_path.glob("*.zip")))
-        return len(list(self.cache_path.glob("*.pkl")))
+#     def compute_length(self):
+#         if self.optimize_zip:
+#             return len(list(self.cache_path.glob("*.zip")))
+#         return len(list(self.cache_path.glob("*.pkl")))
 
-    def __getitem__(self, idx):
-        if self.optimize_zip:
-            item_path = self.cache_path / f"{idx}.zip"
-            with zipfile.ZipFile(item_path, 'r') as z:
-                with z.open('data.pkl', 'r') as f:
-                    item = pickle.load(f)
-        else:
-            item_path = self.cache_path / f"{idx}.pkl"
-            with open(item_path, 'rb') as f:
-                item = pickle.load(f)
-        return item
+#     def __getitem__(self, idx):
+#         if self.optimize_zip:
+#             item_path = self.cache_path / f"{idx}.zip"
+#             with zipfile.ZipFile(item_path, 'r') as z:
+#                 with z.open('data.pkl', 'r') as f:
+#                     item = pickle.load(f)
+#         else:
+#             item_path = self.cache_path / f"{idx}.pkl"
+#             with open(item_path, 'rb') as f:
+#                 item = pickle.load(f)
+#         return item
 
-    def __len__(self):
-        return self.length
+#     def __len__(self):
+#         return self.length
 
 from pytorch_lightning import LightningDataModule
 from omegaconf import DictConfig
@@ -803,9 +808,10 @@ class CTVideoWrapper(Dataset):
     def __init__(self, dataset: Dataset, train=True):
         self.dataset = dataset
         # text_path = "/raid/shared/x2ct/ct-rate-models/train_reports.csv" if train else "/raid/shared/x2ct/ct-rate-models/validation_reports.csv"
-        text_path = "/raid/maximilian.schulze/masterthesis/radchest-label-generator/python/radchest-labels-one-no-negations.json"
-        raw_text_path_csv = "/raid/shared/x2ct/ct-rate-models/train_reports.csv" if train else "/raid/shared/x2ct/ct-rate-models/validation_reports.csv"
-        self.raw_text_csv = pd.read_csv(raw_text_path_csv, index_col="VolumeName")
+        text_path = "/data/shared/x2ct/backup-maximilian.schulze/maximilian.schulze/masterthesis/radchest-label-generator/python/radchest-labels-one-no-negations.json"
+        raw_text_path = "/home/maximilian.schulze/datasets/CT-RATE/dataset/radiology_text_reports/"
+        raw_text_path += "train_reports.csv" if train else "validation_reports.csv"
+        self.raw_text_csv = pd.read_csv(raw_text_path, index_col="VolumeName")
         with open(text_path, "r") as f:
             self.raw_text_json_radchest = json.load(f)
 
@@ -1019,6 +1025,8 @@ class RadchestCTVideoDataloader(LightningDataModule):
     def val_dataloader(self):
         return DataLoader(self.validation_dataset, batch_size=self.validation.loader.batch_size, shuffle=self.validation.loader.shuffle, num_workers=self.validation.loader.num_workers)
 
+from sgm.data.utils.dataloader import TimedDataLoader
+
 class RadchestCTVideo128Dataloader(LightningDataModule):
     def __init__(self,
         num_slices: int,
@@ -1041,7 +1049,7 @@ class RadchestCTVideo128Dataloader(LightningDataModule):
             self.validation_dataset = ConditionCacheEnricher(self.validation_dataset, self.condition_cache_path, split="valid")
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.train.loader.batch_size, shuffle=self.train.loader.shuffle, num_workers=self.train.loader.num_workers, drop_last=True)
+        return TimedDataLoader(self.train_dataset, batch_size=self.train.loader.batch_size, shuffle=self.train.loader.shuffle, num_workers=self.train.loader.num_workers, drop_last=True)
 
     def val_dataloader(self):
         return DataLoader(self.validation_dataset, batch_size=self.validation.loader.batch_size, shuffle=self.validation.loader.shuffle, num_workers=self.validation.loader.num_workers)

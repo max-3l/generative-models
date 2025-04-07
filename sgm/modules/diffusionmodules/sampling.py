@@ -71,7 +71,6 @@ class BaseDiffusionSampler:
             )
         return sigma_generator
 
-
 class SingleStepDiffusionSampler(BaseDiffusionSampler):
     def sampler_step(self, sigma, next_sigma, denoiser, x, cond, uc, *args, **kwargs):
         raise NotImplementedError
@@ -129,7 +128,6 @@ class EDMSampler(SingleStepDiffusionSampler):
             )
 
         return x
-
 
 class AncestralSampler(SingleStepDiffusionSampler):
     def __init__(self, eta=1.0, s_noise=1.0, *args, **kwargs):
