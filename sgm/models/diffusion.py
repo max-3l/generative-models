@@ -226,8 +226,12 @@ class DiffusionEngine(pl.LightningModule):
 
     def forward(self, x, batch):
         loss = self.loss_fn(self.model, self.denoiser, self.conditioner, x, batch)
-        loss_mean = loss.mean()
-        loss_dict = {"train/loss": loss_mean}
+        if isinstance(loss, dict):
+            loss_mean = loss['loss'].mean()
+            loss_dict = {f'train/{k}': v.mean() for k, v in loss.items()}
+        else:
+            loss_mean = loss.mean()
+            loss_dict = {"train/loss": loss_mean}
         return loss_mean, loss_dict
 
     def shared_step(self, batch: Dict) -> Any:
@@ -244,10 +248,10 @@ class DiffusionEngine(pl.LightningModule):
         return x, conditioning
 
     def validation_step(self, batch, batch_idx):
-        metrics = self.batch_sample_metrics(batch, return_images=False)
+        metrics = self.batch_sample_metrics(batch, return_images=False, aggregate=True)
         metrics = { f"val/{key}": el for key, el in metrics.items() }
         with self.ema_scope():
-            ema_metrics = self.batch_sample_metrics(batch, return_images=False)
+            ema_metrics = self.batch_sample_metrics(batch, return_images=False, aggregate=True)
         ema_metrics = { f"val_ema/{key}": el for key, el in metrics.items() }
         all_metrics = metrics | ema_metrics
         self.log_dict(all_metrics)
@@ -468,6 +472,7 @@ class DiffusionEngine(pl.LightningModule):
         batch: Dict,
         ucg_keys: List[str] = None,
         return_images = True,
+        aggregate: bool = False,
     ) -> Dict:
         conditioner_input_keys = [e.input_key for e in self.conditioner.embedders]
         if ucg_keys:
@@ -517,6 +522,8 @@ class DiffusionEngine(pl.LightningModule):
         video_inputs = rearrange(video_inputs, "b t c h w -> b c t h w")
         psnr, ssim = compute_3d_psnr_ssim(video_inputs, video_samples, data_range=(-1, 1))
         output = { "psnr": psnr, "ssim": ssim, "mse": (video_samples - video_inputs).pow(2).flatten(start_dim=1).mean(dim=1), "mse_latents": (z - sample_latents).pow(2).flatten(start_dim=1).mean(dim=1) }
+        if aggregate:
+            output = { key: value.mean() for key, value in output.items() }
         if return_images:
             output |= { "video_samples": video_samples, "video_inputs": video_inputs }
         return output

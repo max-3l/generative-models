@@ -5,11 +5,13 @@ from sgm.util import instantiate_from_config
 import json
 from torch.utils.data import default_collate
 
-def load_model_and_data_and_config():
-    configs = list(Path("logs/2025-02-28T14-19-35_x2ct-ct-sv3d-diffusion-ct-cached-128/configs").glob("*.yaml"))
+def load_model_and_data_and_config(
+        run_name="2025-02-28T14-19-35_x2ct-ct-sv3d-diffusion-ct-cached-128",
+        chkpt_path= "/data/shared/x2ct/backup-maximilian.schulze/maximilian.schulze/generative-models/logs/2025-02-28T14-19-35_x2ct-ct-sv3d-diffusion-ct-cached-128/checkpoints/epoch=000601.ckpt"
+    ):
+    configs = list(Path(f"logs/{run_name}/configs").glob("*.yaml"))
     configs = [OmegaConf.load(c) for c in configs]
     config = OmegaConf.merge(*configs)
-    chkpt_path = "/data/shared/x2ct/backup-maximilian.schulze/maximilian.schulze/generative-models/logs/2025-02-28T14-19-35_x2ct-ct-sv3d-diffusion-ct-cached-128/checkpoints/epoch=000601.ckpt"
     assert Path(chkpt_path).exists(), f"Checkpoint {chkpt_path} does not exist"
     assert Path(chkpt_path).is_file(), f"Checkpoint {chkpt_path} is not a file"
     config.model.params.first_stage_config.params.ckpt_engine = config.model.params.first_stage_config.params.ckpt_engine.replace("/raid/maximilian.schulze", "/data/shared/x2ct/backup-maximilian.schulze/maximilian.schulze")

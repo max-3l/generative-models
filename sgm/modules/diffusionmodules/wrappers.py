@@ -55,8 +55,9 @@ class OpenAIVideoWrapper(IdentityWrapper):
     ) -> torch.Tensor:
 
         for k in ["crossattn", "concat"]:
-            c[k] = repeat(c[k], "b ... -> b t ...", t=self.num_frames)
-            c[k] = rearrange(c[k], "b t ... -> (b t) ...", t=self.num_frames)
+            if "concat" in c:
+                c[k] = repeat(c[k], "b ... -> b t ...", t=self.num_frames)
+                c[k] = rearrange(c[k], "b t ... -> (b t) ...", t=self.num_frames)
 
         x = torch.cat((x, c.get("concat", torch.Tensor([]).type_as(x))), dim=1)
         if "cond_view" in c:
